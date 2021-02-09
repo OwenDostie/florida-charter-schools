@@ -1,6 +1,0 @@
-*
-!.gitignore
-!readme.md
-!/src/*.R
-!*.Rmd
-!data_dictionary
