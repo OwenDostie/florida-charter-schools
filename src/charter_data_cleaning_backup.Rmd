@@ -1,0 +1,840 @@
+---
+title: "Charter Data Final"
+output: html_notebook
+---
+
+## Prepare
+
+```{r echo=F}
+rm(list = ls())
+library(tidyverse)
+library(data.table)
+library(stringdist)
+library(geosphere)
+options(scipen=34)
+`%!in%` <- function(a,b) !a %in% b
+s <- function() s_df <<- df
+l <- function() df <<- s_df
+# mode <- function(a)  names(sort(table(a), decreasing=T))[1]
+# rm(list = ls()[grep("t_.*",ls())])
+```
+
+Load and transform all data sources
+```{r}
+tictoc::tic()
+# Urban Institute ----
+# ui
+source("src/transform_urban_institute.R")
+
+# Gradewise Enrollment ----
+# gwe
+source("src/transform_gradewise_enr.R") 
+
+# Old Dataset ----
+df_old <- fread("/Users/owendostie/Owen/Work & Professional/Charter Research/Research Question 1/sch_complete_05_26_20.csv", integer64 = "numeric") %>% as.data.table
+if ("V1" %in% names(df_old)) { df_old[,V1:=NULL] }
+
+# Load main df
+source("src/load_df.R")
+
+# Location data
+source("src/transform_location.R")
+tictoc::toc()
+```
+
+```{r eval=FALSE}
+# Student Demographics ----
+# dem
+dem <- fread("src/Public Schools_Demographics_1997-2017.csv", integer64 = "numeric") %>% as.data.table
+dem[,Year := substr(Year,1,4) %>% as.numeric()]
+
+
+# School Grades ----
+# sg2014 and sg2017
+sg2014 <- fread("src/School_Grades_1999-2014_v2.csv", stringsAsFactors = F) %>% as.data.table()
+sg2017 <- fread("src/School_Grades_2015-2017_v2.csv", stringsAsFactors = F) %>% as.data.table()
+source("src/transform_school_grades.R")
+```
+
+## Fix Latitude and longitude
+### Writeup
+Latitude and longitude are used to calculate the distances between institutions. At the moment, we are considering only schools that have been marked school_type=="regular school" and charter=="no" for all years that enrollment is > 0. Charter schools are considered only if they are marked as charter == "yes" for all years which enrollment > 0. All latitude and longitude operations will be done looking at this subset of the data, including the filter that enrollment must be greater than 0. This is relevant because a distinct_charter may have years where enrollment is 0 and the school is at a different address. We don't need to fix this address. Subset df so that it meets all of these conditions. Once all of the appropriate coordinates have been found, they can be merged into the original df again by ncessch and year. 
+
+Steps:
+- Decrease the number of addresses by reducing to abbreviations. This should be a conservative operation, we don't need to combine all addresses this way. 
+- Remove addresses that we can't trust. e.g. PO boxes. Remove NA
+- For every NA address, fill it in if possible. Priorities are: nearest filled location, more recent year takes precedence. Copy over city_location and zip_location at the same time.
+- Look up every unique location, creating a gm_lat and gm_lon field
+- Some of the google maps lookups are wrong, and some of the geo_latitude ones are wrong. The first iteration of the google maps lookup was done with street, city and state. There was no zip code included, and the name of the school was not used. Can also be identified through the LEA stuff. 
+- For each school, cluster the addresses into what we expect to be seperate addresses. This should also be a conservative operation. It is much better to have duplicates of the same address than to have a single location representing 2 different addresses. Seperate in the sense that we will at least have to look up each one individually. There will still be room to combine these based on clustering of lat lon. 
+
+Google Maps steps:
+- Use address, city, FL, zip to geocode each unique combination that appears in the dataset. Adresses can now be grouped by the way that they show up on google maps. 
+- Pair the google maps addresses with the manual_latlon when possible, and if their coordinates are within 1000ft of each other then accept the google coordinates as correct and record this pair as the coordinates for 
+- If none of the zip values are present in an address, verify that the location is correct by looking up via name. 
+- Presence at a google maps address for a single year will mark a school as nonmoved
+
+Validation:
+- Compare gm_lat and gm_lon to the ones I have in the old dataset, and look for significant distance between them. 
+- Search for typos in addresses by 
+- List unique addresses by shortest
+- Compute distance matrix of unique addresses, and look to cluster them based on similarity
+
+#### Coordinates
+
+What I currently have:
+- Big database of gm locations, and their coordinates, some of them are definitely wrong.
+- A dataset of schools that I looked up during the last session, some of them are definitely wrong. 
+- Addresses for most of the years of the 70000 row ui dataset, some of which are definitely typos or misleading. 
+
+Look at schools that spent 1-2 years at a secondary location, this is a good place to start when looking for typos or rows that should be outright ignored from the dataset. 
+
+#### Misc notes
+1 meter ~ 3.28084 feet
+1 miles ~ 1609.34 meter
+
+### Code
+#### Flagging for verification
+
+Manually fix observations
+```{r}
+dv <- fread("src/manually_corrected_locations.csv",integer64 = "double") %>% as.data.table
+dv$ncessch <- as.numeric(dv$ncessch)
+
+df[grepl("STOP CAMP",school_name)]
+
+for (row in 1:nrow(dv)) {
+  if (dv[row,rep_type] == "") next
+  
+  if (dv[row,rep_type] == "n") {
+    df[ncessch == dv[row,ncessch],ncessch:=dv[row,ncessch_rep]]; next
+    }
+  
+  if (dv[row,rep_type] == "na") {
+    df[ncessch == dv[row,ncessch],ncessch:=dv[row,ncessch_rep]]
+    if (!is.na(dv[row,rep_year])) { 
+      df[ncessch == dv[row,ncessch],`:=`(
+        gm_lat = df[ncessch == dv[row,ncessch] & year == dv[row,rep_yeaar],gm_lat],
+        gm_lon = df[ncessch == dv[row,ncessch] & year == dv[row,rep_yeaar],gmlont],
+        gm_formatted_address = df[ncessch == dv[row,ncessch] & year == dv[row,rep_yeaar],gm_formatted_address],
+        ncessch = dv[row,ncessch])
+        ] }
+    next
+  }
+  
+  if (dv[row,rep_type] == "ngeo") {
+    # want to use address_mailing for this one, and the geocoded location
+    next
+  }
+  
+  if (dv[row,rep_type] == "d") {
+    df <- df[ncessch != dv[row,ncessch]]
+  }
+  
+  if (dv[row,rep_type] %!in% c("m","y","f")) next
+  
+  
+  # address replacements ----
+
+  
+  y <- as.numeric(dv[row,substr(year,1,4)]):as.numeric(dv[row,substr(year,nchar(year)-3,nchar(year))])
+  
+  if (dv[row,rep_type] == "m") {
+  df[ncessch == dv[row,ncessch] & year %in% y, `:=`(gm_formatted_address=df[ncessch == dv[row,ncessch] & year %!in% y,head(names(sort(table(gm_formatted_address),decr=T)),1)],
+                                                    gm_lat=df[ncessch == dv[row,ncessch] & year %!in% y,median(gm_lat,na.rm=T)], gm_lon=df[ncessch == dv[row,ncessch] & year %!in% y,median(gm_lon,na.rm=T)])]
+  }
+
+  if (dv[row,rep_type] == "y") {
+  df[ncessch == dv[row,ncessch] & year %in% y, `:=`(gm_formatted_address=df[ncessch == dv[row,ncessch] & year == dv[row,rep_year], gm_formatted_address],
+                                                    gm_lat=df[ncessch == dv[row,ncessch] & year == dv[row,rep_year], gm_lat], gm_lon=df[ncessch == dv[row,ncessch] & year == dv[row,rep_year], gm_lon])]
+    }
+    
+  if (dv[row,rep_type] == "f") {
+  df[ncessch == dv[row,ncessch] & year %in% y, `:=`(gm_formatted_address=dv[row,gm_formatted_address],
+                                                    gm_lat=dv[row,gm_lat], gm_lon=dv[row,gm_lon])]
+  }
+}
+```
+
+```{r}
+df[ncessch == 120072000875]
+df[grepl("RESOURCES STAFF",school_name)]
+
+df[ncessch %in% df[is.na(gm_lat),ncessch]] %>% arrange(desc(enrollment))
+
+df[is.na(gm_lat)]
+```
+
+#### Distance matrix
+
+```{r}
+#             s()
+#             l()
+# if (file.exists("src/distance_matrix.csv")) { dm <- fread("src/distance_matrix.csv"); stop("Distance matrix load ed from file (not a real error)") }
+dmlids <- df[!is.na(gm_lat) & !is.na(gm_lon),.(location_id=.GRP),by=c("gm_lat","gm_lon")]
+dm <- matrix(data = as.numeric(NA), ncol=nrow(dmlids), nrow = nrow(dmlids))
+for (row in 1:nrow(dmlids)) {
+  dm[row,] <- geosphere::distHaversine(dmlids[row,.(gm_lon,gm_lat)], dmlids[,.(gm_lon,gm_lat)])
+}
+
+# convert from meters to miles
+dm <- dm*0.000621371
+
+# fwrite(dm,"src/distance_matrix.csv")
+df <- merge(df,dmlids,all.x=T,by=c("gm_lat","gm_lon"))
+```
+
+Enrollment columns
+```{r}
+nrow(df)
+# delete all names that are generated by the algorithm so that we don't add duplicate columns
+df[,names(df)[grep("tpse|^ce|ntps|ncharter",names(df))] := NULL]
+as.numeric(grep("tpse|^ce|ntps|ncharter",names(df)))
+
+
+for (r in c(1,2.5,5,10)) {
+  dm_bool <- (dm < r)
+  for (y in 1999:2018) {
+  tps_ids <- df[charter=="no" & year == y,.(k_enr=sum(k_enr,na.rm=T),g1_enr=sum(grade1_enr,na.rm=T),g2_enr=sum(grade2_enr,na.rm=T),g3_enr=sum(grade3_enr,na.rm=T),g4_enr=sum(grade4_enr,na.rm=T),g5_enr=sum(grade5_enr,na.rm=T), g6_enr=sum(grade6_enr,na.rm=T),g7_enr=sum(grade7_enr),g8_enr=sum(grade8_enr,na.rm=T),g9_enr=sum(grade9_enr,na.rm=T),g10_enr=sum(grade10_enr,na.rm=T),g11_enr=sum(grade11_enr,na.rm=T),g12_enr=sum(grade12_enr,na.rm=T),tot_enr=sum(enrollment,na.rm=T)),by=location_id][!is.na(location_id)]
+  charter_ids <- df[charter=="yes" & year == y,.(k_enr=sum(k_enr,na.rm=T),g1_enr=sum(grade1_enr,na.rm=T),g2_enr=sum(grade2_enr,na.rm=T),g3_enr=sum(grade3_enr,na.rm=T),g4_enr=sum(grade4_enr,na.rm=T),g5_enr=sum(grade5_enr,na.rm=T), g6_enr=sum(grade6_enr,na.rm=T),g7_enr=sum(grade7_enr),g8_enr=sum(grade8_enr,na.rm=T),g9_enr=sum(grade9_enr,na.rm=T),g10_enr=sum(grade10_enr,na.rm=T),g11_enr=sum(grade11_enr,na.rm=T),g12_enr=sum(grade12_enr,na.rm=T),tot_enr=sum(enrollment,na.rm=T)),by=location_id][!is.na(location_id)]
+  #tps enrollments
+  loc_enr <- merge(data.table(location_id=c(1:nrow(dm)),key="location_id"),tps_ids,all.x=T,by="location_id") %>% map_df(~nafill(.,fill=0)) %>% as.data.table()
+  # charter enrollments
+  loc_enr2 <- merge(data.table(location_id=c(1:nrow(dm)),key="location_id"),charter_ids,all.x=T,by="location_id") %>% map_df(~nafill(.,fill=0)) %>% as.data.table()
+  setkey(tps_ids,location_id); setkey(charter_ids,location_id)
+    
+    if (exists("big_enr_charter")) { 
+      big_enr_charter <- rbind(big_enr_charter, ((1*dm_bool) %*% as.matrix(loc_enr2[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))])) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y)) 
+    } else {
+      big_enr_charter <- ((1*dm_bool) %*% as.matrix(loc_enr2[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))])) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y) 
+    }
+  if (exists("big_enr_tps")) { 
+      big_enr_tps <- rbind(big_enr_tps, ((1*dm_bool) %*% as.matrix(loc_enr[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))])) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y)) 
+    } else {
+      big_enr_tps <- ((1*dm_bool) %*% as.matrix(loc_enr[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))])) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y) 
+    }
+  if (exists("n_charter")) { 
+      n_charter <- rbind(n_charter, ((1*dm_bool) %*% as.matrix(loc_enr2[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))]>=1)) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y)) 
+    } else {
+      n_charter <- ((1*dm_bool) %*% as.matrix(loc_enr2[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))]>=1)) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y) 
+    }
+  if (exists("n_tps")) { 
+      n_tps <- rbind(n_tps, ((1*dm_bool) %*% as.matrix(loc_enr[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))]>=1)) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y)) 
+    } else {
+      n_tps <- ((1*dm_bool) %*% as.matrix(loc_enr[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))]>=1)) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y) 
+    }
+  }
+  big_enr_charter <- as.data.table(big_enr_charter); big_enr_tps <- as.data.table(big_enr_tps)
+  n_charter <- as.data.table(n_charter); n_tps <- as.data.table(n_tps)
+  names(big_enr_charter) <- c(paste0("ce_",r,"m_",names(big_enr_charter)[1:13]),"location_id","year"); names(big_enr_charter) <- gsub("\\_enr","",names(big_enr_charter))
+  names(big_enr_tps) <- c(paste0("tpse_",r,"m_",names(big_enr_tps)[1:13]),"location_id","year"); names(big_enr_tps) <- gsub("\\_enr","",names(big_enr_tps))
+  names(n_charter) <- c(paste0("ncharter_",r,"m_",names(n_charter)[1:13]),"location_id","year"); names(n_charter) <- gsub("\\_enr","",names(n_charter))
+  names(n_tps) <- c(paste0("ntps_",r,"m_",names(n_tps)[1:13]),"location_id","year"); names(n_tps) <- gsub("\\_enr","",names(n_tps))
+  df <- merge(df,big_enr_charter,all.x=T,by=c("location_id","year"))
+  df <- merge(df,big_enr_tps,all.x=T,by=c("location_id","year"))
+  df <- merge(df,n_charter,all.x=T,by=c("location_id","year"))
+  df <- merge(df,n_tps,all.x=T,by=c("location_id","year"))
+  big_enr_charter <- NULL; big_enr_tps <- NULL;
+  n_charter <- NULL; n_tps <- NULL;
+}
+nrow(df)
+```
+
+#### Verify
+```{r}
+# simple checks
+df[ce_1m_g1 < grade1_enr & charter == "yes"]
+if (df[tpse_1m_g1 < grade1_enr & charter == "no"] %>% nrow() > 0 |
+    df[ce_1m_g3 < grade3_enr & charter == "yes"] %>% nrow() > 0 |
+    df[ce_5m_g8 < grade8_enr & charter == "yes"] %>% nrow() > 0 )   warning("\nYou failed a simple check for radial enrollment")
+if (sum(nchar(names(df)) > 32) > 0) warning("\nThere are colnames with more than 32 characters") 
+if (max(dm[1092,] - dm[,1092]) > 0) warning("\nDistance matrix is not perfectly symmetrical") # 1092 is a charter school for every yearo
+
+df[tpse_1m_g1_enr == ce_1m_g1_enr]
+```
+
+```{r}
+df[location_id %in% lids]
+
+df[location_id == 1935,.(first(gm_lat),first(gm_lon))]
+
+df[by=location_id,,.N] %>% arrange(desc(N))
+
+# sum based on subset of df using distance matrix and dist_haversine
+df[location_id %in% lids & year == 2018 & charter=="yes"]$location_id
+df[location_id %in% which(dm[1935,] <= 5) & year == 2018 & charter == "yes", sum(grade1_enr)]
+dm[1092,] <= 5
+get_map(location = df[location_id %in% lids,.(min(gm_lon),min(gm_lat),max(gm_lon),max(gm_lat))] %>% matrix(nrow = 1))
+# ce_5m_g1 = 6050
+# locaton_id = 1092
+# lat = 25.56762    lon = -80.36597
+```
+
+Sample random observation and compare it with the distance calculations. 
+```{r}
+randobs <- df %>% sample_n(1)
+```
+
+```{r}
+for (i in 1:100) {
+  y=sample(1999:2018,1)
+  r=sample(c(1,2.5,5,10),1)
+  randobs <- df[year==y] %>% sample_n(1)
+  which(distHaversine(c(randobs$gm_lon,randobs$gm_lat),df[by=location_id,!is.na(gm_lat),.(lat=first(gm_lat),lon=first(gm_lon))][,.(lon,lat)] %>% as.matrix(.,ncol=2)) <= 1609.34*r) -> lids
+  enr1=df[location_id %in% lids & year == 2018, sum(grade1_enr)]
+  
+  tps_ids <- df[charter=="no" & year==y,.(k_enr=sum(k_enr,na.rm=T),g1_enr=sum(grade1_enr,na.rm=T),g2_enr=sum(grade2_enr,na.rm=T),g3_enr=sum(grade3_enr,na.rm=T),g4_enr=sum(grade4_enr,na.rm=T),g5_enr=sum(grade5_enr,na.rm=T), g6_enr=sum(grade6_enr,na.rm=T),g7_enr=sum(grade7_enr),g8_enr=sum(grade8_enr,na.rm=T),g9_enr=sum(grade9_enr,na.rm=T),g10_enr=sum(grade10_enr,na.rm=T),g11_enr=sum(grade11_enr,na.rm=T),g12_enr=sum(grade12_enr,na.rm=T),tot_enr=sum(enrollment,na.rm=T)),by=location_id][!is.na(location_id)]
+   tps_ids <- df[charter=="no" & year==y,.(k_enr=sum(k_enr,na.rm=T),g1_enr=sum(grade1_enr,na.rm=T),g2_enr=sum(grade2_enr,na.rm=T),g3_enr=sum(grade3_enr,na.rm=T),g4_enr=sum(grade4_enr,na.rm=T),g5_enr=sum(grade5_enr,na.rm=T), g6_enr=sum(grade6_enr,na.rm=T),g7_enr=sum(grade7_enr),g8_enr=sum(grade8_enr,na.rm=T),g9_enr=sum(grade9_enr,na.rm=T),g10_enr=sum(grade10_enr,na.rm=T),g11_enr=sum(grade11_enr,na.rm=T),g12_enr=sum(grade12_enr,na.rm=T),tot_enr=sum(enrollment,na.rm=T)),by=location_id][!is.na(location_id)]
+  charter_ids <- df[charter=="yes" & year==y,.(k_enr=sum(k_enr,na.rm=T),g1_enr=sum(grade1_enr,na.rm=T),g2_enr=sum(grade2_enr,na.rm=T),g3_enr=sum(grade3_enr,na.rm=T),g4_enr=sum(grade4_enr,na.rm=T),g5_enr=sum(grade5_enr,na.rm=T), g6_enr=sum(grade6_enr,na.rm=T),g7_enr=sum(grade7_enr),g8_enr=sum(grade8_enr,na.rm=T),g9_enr=sum(grade9_enr,na.rm=T),g10_enr=sum(grade10_enr,na.rm=T),g11_enr=sum(grade11_enr,na.rm=T),g12_enr=sum(grade12_enr,na.rm=T),tot_enr=sum(enrollment,na.rm=T)),by=location_id][!is.na(location_id)]
+  #tps enrollments
+  loc_enr <- merge(data.table(location_id=c(1:nrow(dm)),key="location_id"),tps_ids,all.x=T,by="location_id") %>% map_df(~nafill(.,fill=0)) %>% as.data.table()
+  # charter enrollments
+  loc_enr2 <- merge(data.table(location_id=c(1:nrow(dm)),key="location_id"),charter_ids,all.x=T,by="location_id") %>% map_df(~nafill(.,fill=0)) %>% as.data.table()
+  setkey(tps_ids,location_id); setkey(charter_ids,location_id)
+    
+    if (exists("big_enr_charter")) {
+      big_enr_charter <- rbind(big_enr_charter, ((1*dm_bool) %*% as.matrix(loc_enr2[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))])) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y)) 
+    } else {
+      big_enr_charter <- ((1*dm_bool) %*% as.matrix(loc_enr2[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))])) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y) 
+    }
+  if (exists("big_enr_tps")) { 
+      big_enr_tps <- rbind(big_enr_tps, ((1*dm_bool) %*% as.matrix(loc_enr[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))])) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y)) 
+    } else {
+      big_enr_tps <- ((1*dm_bool) %*% as.matrix(loc_enr[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))])) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y) 
+    }
+  if (exists("n_charter")) {
+      n_charter <- rbind(n_charter, ((1*dm_bool) %*% as.matrix(loc_enr2[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))]>=1)) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y)) 
+    } else {
+      n_charter <- ((1*dm_bool) %*% as.matrix(loc_enr2[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))]>=1)) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y) 
+    }
+  if (exists("n_tps")) { 
+      n_tps <- rbind(n_tps, ((1*dm_bool) %*% as.matrix(loc_enr[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))]>=1)) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y)) 
+    } else {
+      n_tps <- ((1*dm_bool) %*% as.matrix(loc_enr[,c(paste0(c(paste0("g",1:12),"k"),"_enr"))]>=1)) %>% as.data.table %>% mutate(location_id = 1:nrow(dm), year=y) 
+    }
+  big_enr_charter <- as.data.table(big_enr_charter); big_enr_tps <- as.data.table(big_enr_tps)
+  n_charter <- as.data.table(n_charter); n_tps <- as.data.table(n_tps)
+  names(big_enr_charter) <- c(paste0("ce_",r,"m_",names(big_enr_charter)[1:13]),"location_id","year"); names(big_enr_charter) <- gsub("\\_enr","",names(big_enr_charter))
+  names(big_enr_tps) <- c(paste0("tpse_",r,"m_",names(big_enr_tps)[1:13]),"location_id","year"); names(big_enr_tps) <- gsub("\\_enr","",names(big_enr_tps))
+  names(n_charter) <- c(paste0("ncharter_",r,"m_",names(n_charter)[1:13]),"location_id","year"); names(n_charter) <- gsub("\\_enr","",names(n_charter))
+  names(n_tps) <- c(paste0("ntps_",r,"m_",names(n_tps)[1:13]),"location_id","year"); names(n_tps) <- gsub("\\_enr","",names(n_tps))
+  df <- merge(df,big_enr_charter,all.x=T,by=c("location_id","year"))
+  df <- merge(df,big_enr_tps,all.x=T,by=c("location_id","year"))
+  df <- merge(df,n_charter,all.x=T,by=c("location_id","year"))
+  df <- merge(df,n_tps,all.x=T,by=c("location_id","year"))
+  big_enr_charter <- NULL; big_enr_tps <- NULL;
+  n_charter <- NULL; n_tps <- NULL;
+}
+charter_ids[location_id %in% lids, sum(g1_enr)] + tps_ids[location_id %in% lids, sum(g1_enr)]
+
+charter_ids[location_id %in% lids]
+
+   
+nrow(df)
+```
+
+Using ggmap
+```{r}
+library(ggmap)
+register_google(key="AIzaSyCbtZ1HhyXnHcY2c5AFM5xHH2OV6UvxSYU")
+
+map_fl <- get_map(location="florida",zoom=6)
+ggmap(map_fl) + geom_point(data=df,aes(y=gm_lat,x=gm_lon))
+
+map <- get_map(location=c(lon = -80.36597,lat = 25.56762),maptype="roadmap",zoom=12)
+ggmap(map) + geom_point(data = df[location_id %in% lids], aes(x=gm_lon,y=gm_lat))
+```
+
+## Data Sources
+
+***Data Sources***
+
+All sources will eventually contain data 1999 through 2018, some are currently a year or two behind 2018
+
+*Urban Institute Dataset*
+(https://educationdata.urban.org/data-explorer/schools/) downloaded 06/04/20 
+Most information comes from the common core of data [partial data dictionary](https://nces.ed.gov/ccd/psadd.asp)
+contains general information about:
+- enrollment
+- lowest/highest grade offered
+- charter status
+- virtual status
+- latitude & longitude
+```{r eval=F}
+ui %>% sample_n(20)
+```
+
+*Latitude & Longitude*
+Pulled from one file from ELSI, source of coordinates is CCD
+(https://nces.ed.gov/ccd/elsi/) downloaded 06/15/20
+
+*Grade-wise enrollment* 
+Pulled as four separate files from ELSI table generator, then combined 
+(https://nces.ed.gov/ccd/elsi/) downloaded 06/05/20
+```{r eval=F}
+gwe %>% select(ncessch, year, everything()) %>% sample_n(10)
+```
+
+*School grades datasets*
+(http://www.fldoe.org/accountability/accountability-reporting/school-grades/archives.stml)
+1999 - 2017
+- Test scores
+- School grade
+```{r eval=F}
+sg2014 %>%
+  select(key_sch, distnum_schnum,`District Number`,`School Number`,Year,everything()) %>% sample_n(10)
+
+sg2017 %>%
+  select(key_sch, distnum_schnum,`District Number`,`School Number`,Year,everything()) %>% sample_n(10)
+```
+
+*Student demographics*
+(https://nces.ed.gov/ccd/elsi/tableGenerator.aspx)
+1997 - 2016
+- Total enrollment
+- Highest and lowest grade
+- Teachers & pupil teacher ratio
+```{r eval=F}
+dem %>% sample_n(20)
+dem$Year %>% table
+```
+
+## Export
+
+```{r}
+#        s()          l()
+names(df)
+# drop fully irrelevant columns
+df[,c("gm_street_number","gm_route","gm_postal_code"):=NULL]
+
+# order the columns the way that I like
+df %>% select(
+  ncessch,year,
+  school_name, distinct_charter, distinct_regular_nc,
+  gm_formatted_address, k12_enrollment, 
+  gm_lat,gm_lon,
+  street_location, city_location, zip_location,
+  school_type,  charter, 
+  everything()
+) 
+
+# fwrite(df,"sch_exclude_06_23_20.csv")
+# fwrite(df,"sch_include_06_23_20.csv")
+
+
+# Vaslidation checks ----
+
+
+setkey(df,ncessch,year); setkey(ui,ncessch,year)
+(ui[!df] %>% nrow + nrow(df) - nrow(ui)) %>% warning(paste0(" rows are included in neither sch_exclude nor sch_include"))
+```
+
+
+## Misc. 
+### send to dewey;  fix school_type;
+
+Table *nocharter stats*
+```{r}
+df[enrollment > 0 & virtual == "no"] -> df
+
+# charter
+dff <- df[,.(charter_all_years = all(charter=="yes"),
+                     charter_some_years = "yes" %in% charter & "no" %in% charter,
+                     charter_no_years = all(charter=="no")),by=ncessch]
+dff[,charter_total:=charter_all_years + charter_some_years + charter_no_years]; 
+df <- merge(df,dff,all.x=T,by="ncessch")[charter_total == 1]
+
+# school type
+dff <- df[,.(regular_all_years = all(school_type=="regular school"),
+                     regular_some_years = mean("regular school" == school_type) %!in% c(0,1),
+                     regular_no_years = "regular school"%!in%school_type),by=ncessch]
+dff
+dff[,regular_total:=regular_all_years + regular_some_years + regular_no_years]; 
+df <- merge(df,dff,all.x=T,by="ncessch"); rm(dff)
+
+# merge the tables ----
+
+df$school_type %>% table
+
+# all years not charter; all years regular
+df[,r_all_nc_all:=enrollment*charter_no_years*regular_all_years]
+df[,r_some_nc_all:=enrollment*charter_no_years*regular_some_years]
+df[,r_none_nc_all:=enrollment*charter_no_years*regular_no_years]
+
+df[,r_all_nc_all_n:=charter_no_years*regular_all_years]
+df[,r_some_nc_all_n:=charter_no_years*regular_some_years]
+df[,r_none_nc_all_n:=charter_no_years*regular_no_years]
+
+# charter all years
+df[,c_all_years:=enrollment*charter_all_years]
+
+# charter some years
+df[,charter_but_nc_other_years:=enrollment*charter_some_years*(charter=="yes")]
+df[,nc_but_charter_other_years:=enrollment*charter_some_years*(charter=="no")]
+
+df[,.(enrollment = sum(enrollment),
+      r_all_nc_all = sum(r_all_nc_all),
+      r_some_nc_all = sum(r_some_nc_all),
+      r_none_nc_all = sum(r_none_nc_all),
+      c_all_years = sum(c_all_years),
+      charter_but_nc_other_years = sum(charter_but_nc_other_years),
+      nc_but_charter_other_years = sum(nc_but_charter_other_years),
+      r_all_nc_all_n = sum(r_all_nc_all_n),
+      r_some_nc_all_n = sum(r_some_nc_all_n),
+      r_none_nc_all_n = sum(r_none_nc_all_n),
+      c_all_years_n = sum(charter_all_years),
+      charter_but_nc_other_years_n = sum(charter_some_years*(charter=="yes")),
+      nc_but_charter_other_years_n = sum(charter_some_years*(charter=="no"))
+      ),by=year] %>% mutate(cat_enr_total = r_all_nc_all + r_some_nc_all + r_none_nc_all + c_all_years + charter_but_nc_other_years + nc_but_charter_other_years, `enr-cat_enr` = enrollment-cat_enr_total) %>% fwrite("charter enr and year.csv")
+```
+
+Schools with ambiguous school types. 
+```{r}
+{ 
+df[ambiguous == 1,.(percent_regular=mean("regular school" == school_type), denom=.N, hc = "yes" %in% charter),by=ncessch][percent_regular > 0 & percent_regular < 1 & hc == T] -> t_pr
+df[ncessch %in% t_pr$ncessch,
+   .(ncessch,year,school_name,school_status,school_type,charter,school_level,enrollment,virtual,magnet,street_location,city_location)] %>% 
+  merge(.,t_pr %>% select(-hc),by="ncessch",all.x=T) %>% 
+  arrange(desc(percent_regular)) %>% filter(ncessch %!in% st$ncessch) #%>% fwrite(.,"school_types_charter.csv")
+  # ggplot(.,aes(x=percent_regular)) + geom_histogram()
+  #pull(percent_regular) %>% table %>% sort(decreasing=T) %>% head(20)
+}
+
+table(df$school_type)
+ggplot(df[enrollment>0], aes(x=enrollment,fill=school_status)) + geom_histogram()
+```
+
+Ambiguous charters
+```{r}
+df[ncessch %in% df[,.(nstatus = length(unique(charter[charter !="not applicable"]))),by=ncessch][nstatus!=1,ncessch],.(ncessch,year,school_name,charter,school_status,school_type,school_level,enrollment,virtual,magnet,street_location,city_location)]
+```
+
+all vocational schools
+```{r}
+names(df)
+df[ncessch %in% df[school_type == "vocational school",ncessch],.(ncessch,year,school_name,school_status,school_type, charter,virtual,school_level,enrollment,include,magnet,street_location,city_location)] %>% write_csv("all vocational schools.csv")
+```
+
+Speciaal ed schools
+```{r}
+df[ncessch %in% df[school_type == "special education school",unique(ncessch)] 
+   & ncessch %in% df[school_type == "regular school", unique(ncessch)],
+   .(mean_enr=mean(enrollment)),by=ncessch 
+   ] %>% merge(df,.,by="ncessch") %>% select(charter,everything()) %>% arrange(desc(charter)) %>% fwrite("special education by charter.csv")
+```
+
+other/alternative/detention
+```{r}
+df[school_type %in% c("other/alternative school","detention/correction center","never any k-12 students"),pp:=100/(unname(table(df$school_type)[school_type]))] %>% select(pp,everything()) %>% filter(!is.na(pp)) -> t_oa
+t_oa[t_oa$ncessch %in% sample(t_oa$ncessch,prob=t_oa$pp,size=50),] %>% select(ncessch,year,school_name,school_type,include,everything(),-pp) %>% fwrite("other schools.csv")
+```
+
+
+```{r}
+# not charter every year; regular for every year
+df[ncessch %in% df[,.(c=all(charter != "yes"), r=all(school_type_original == "Regular school")),by=ncessch][c==T & r==T,ncessch],n1:=1]
+
+# not charter every year; not regular for at least one year
+df[ncessch %in% df[,.(c=all(charter != "no"), r=mean(school_type_original == "Regular school")!=1),by=ncessch][c==T & r==T,ncessch],n2:=1]
+
+# charter every year
+df[ncessch %in% df[,.(c=all(charter == "yes"), r=T),by=ncessch][c==T & r==T,ncessch],n3:=1]
+
+# charter and not charter for a mixture of years
+# charter and not charter for a mixture of years
+df[ncessch %in% df[,.(c=mean(charter == "yes"), r=T),by=ncessch][c==T & r==T,ncessch],n4:=1]
+
+df %>% select(school_name, year,charter,school_type, n1,n2,n3,n4,ntot) %>% filter(ntot != 1)
+
+df$ntot <- rowSums(df %>% select(n1,n2,n3,n4))
+
+
+# df[ncessch %in% df[,.(c=all(charter != "yes"), r=all(school_type_original == "Regular school")),by=ncessch][c==T & r==T,ncessch],
+#    .(nc_regular_school_k12_enr = sum(k12_enr,na.rm=T),nc_regular_school_n_schools = sum(enrollment>0)),by=year]
+```
+
+```{r}
+t <- data.table(year= 1999:2018); 
+df$k12_enr <- df$enrollment - df$prek_enr
+t
+# total enrollment
+t <- merge(t,df[,.(total_enrollment = sum(enrollment)),by="year"])
+
+# school type and not for all years
+t <- merge(t,df[ncessch %in% df[,.(c=all(charter != "yes"), r=all(school_type_original == "Regular school")),by=ncessch][c==T & r==T,ncessch],
+   .(nc_regular_school_k12_enr = sum(k12_enr,na.rm=T),nc_regular_school_n_schools = sum(enrollment>0)),by=year],by="year")
+t <- merge(t,df[ncessch %in% df[,.(c=all(charter != "yes"), r=all(school_type_original == "Special education school")),by=ncessch][c==T & r==T,ncessch],
+   .(nc_special_ed_k12_enr = sum(k12_enr,na.rm=T),nc_special_ed_n_schools = sum(enrollment>0)),by=year],by="year")
+t <- merge(t,df[ncessch %in% df[,.(c=all(charter != "yes"), r=all(school_type_original == "Vocational school")),by=ncessch][c==T & r==T,ncessch],
+   .(nc_vocational_k12_enr = sum(k12_enr,na.rm=T),nc_vocational_n_schools = sum(enrollment>0)),by=year],by="year")
+t <- merge(t,df[ncessch %in% df[,.(c=all(charter != "yes"), r=all(school_type_original == "Other/alternative school")),by=ncessch][c==T & r==T,ncessch],
+   .(nc_other_k12_enr = sum(k12_enr,na.rm=T),nc_other_n_schools = sum(enrollment>0)),by=year],by="year")
+t <- merge(t,df[ncessch %in% df[,.(c=all(charter != "yes"), r=all(school_type_original == "Reportable program")),by=ncessch][c==T & r==T,ncessch],
+   .(nc_reportable_program_k12_enr = sum(k12_enr,na.rm=T),nc_reportable_program_n_schools = sum(enrollment>0)),by=year],by="year",all.x=T)
+
+# regular or other some years, not charter for all years
+t <- merge(t,df[school_type_original == "Regular school" & ncessch %in% df[,.(c=all(charter != "yes"), r=mean(school_type_original == "Regular school") %!in% c(0,1)),by=ncessch][c==T & r==T,ncessch],
+   .(nc_regular_some_years_k12_enr = sum(k12_enr,na.rm=T),nc_regular_some_years_n_schools = sum(enrollment>0)),by=year],by="year")
+t <- merge(t,df[school_type_original != "Regular school" & ncessch %in% df[,.(c=all(charter != "yes"), r=mean(school_type_original == "Regular school") %!in% c(0,1)),by=ncessch][c==T & r==T,ncessch],
+   .(nc_not_regular_some_years_k12_enr = sum(k12_enr,na.rm=T),nc_not_regular_some_years_n_schools = sum(enrollment>0)),by=year],by="year")
+# t <- merge(t,df[ncessch %in% df[,.(c=all(charter != "yes"), r=mean(school_type_original == "reportable program")>0),by=ncessch][c==T & r==T,ncessch],
+#    .(nc_reportable_program_some_years_k12_enr = sum(k12_enr),nc_reportable_program_some_years_n_schools = sum(enrollment>0)),by=year],by="year")
+
+# charter for all years
+t <- merge(t,df[ncessch %in% df[,.(c=all(charter == "yes"), r=TRUE),by=ncessch][c==T & r==T,ncessch],
+   .(charter_all_years_k12_enr = sum(k12_enr,na.rm=T),charter_all_years_n_schools = sum(enrollment>0)),by=year],by="year")
+
+# charter for some years
+t <- merge(t,df[charter=="yes" & ncessch %in% df[,.(c=mean(charter != "yes") %!in% c(0,1), r=TRUE),by=ncessch][c==T & r==T,ncessch],
+   .(charter_some_years_k12_enr = sum(k12_enr,na.rm=T),charter_some_years_n_schools = sum(enrollment>0)),by=year],by="year")
+t <- merge(t,df[charter!="yes" & ncessch %in% df[,.(c=mean(charter != "yes") %!in% c(0,1), r=TRUE),by=ncessch][c==T & r==T,ncessch],
+   .(nc_some_years_k12_enr = sum(k12_enr,na.rm=T),nc_some_years_n_schools = sum(enrollment>0)),by=year],by="year")
+
+
+#t <- merge(t,t[,])
+
+t$`sum of all categories` <- rowSums(select(t,colnames(t)[grepl("k12_enr",colnames(t))]),na.rm=T)
+t$`total_enrollment - sum of all categories` <- t$total_enrollment - t$`sum of all categories`
+
+t[year==1999,]%>% select(colnames(t)[grepl("k12_enr",colnames(t))]) #%>% sum(na.rm=T)
+t %>% arrange(year)
+# fwrite(t,"stuff.csv")
+```
+
+Files about resolving charter status
+```{r}
+df[ncessch %in% df[,"not applicable" %in% charter,by=ncessch][V1 == TRUE,ncessch]] %>% select(charter,everything()) %>% fwrite("not applicable charters.csv")
+df[ncessch %in% df[,.("yes" %in% charter, "no" %in% charter),by=ncessch][V1 & V2,ncessch]] %>% select(charter, school_status, everything()) %>% fwrite("conflicting charter stataus.csv")
+
+df[ncessch == 120015008530] %>% select(charter, everything())
+```
+
+#### Looking
+Stringdist matrix
+```{r}
+df[!is.na(street_location) & ncessch %!in% unique(dv$ncessch),.(mdist = stringdist::stringdistmatrix(.SD[,street_location], method="lcs") %>% max(na.rm=T),
+      numdist = stringdist::stringdistmatrix(.SD[,gsub("[^0-9d]","",street_location)],method="lcs") %>% max(na.rm=T)),by=ncessch] %>% arrange(mdist) %>% as.data.table() -> t_d
+
+t_d[mdist != -Inf] %>% arrange(desc(mdist + numdist*4))
+
+t_d[mdist != -Inf & (mdist + 4*numdist)<20,ncessch] -> t_d2
+df[ncessch %!in% unique(dv$ncessch) & ncessch %in% t_d2] %>% arrange(desc(max_move_dist)) %>% select(max_move_dist,ncessch,year,gm_formatted_address,street_location,city_location,zip_location,gm_lat,gm_lon,school_name,wildcard,location_verification_method, enrollment,charter,ccd_lat,ccd_lon, everything()) %>% arrange(desc(max_move_dist,ncessch,year)) %>% head(2000) %>% View
+
+# unique names of schools that have been open since 2014
+
+df$school_name %>% unique %>% length
+
+
+str_split(t_names$name,"") %>% unlist %>% table()
+
+#rm(loc_enr,loc_enr2,dm_bool,y,charter_ids,tps_ids,big_enr_charter,big_enr_tps)
+```
+
+Googlemaps unique name queries
+```{r}
+t_names <- fread("src/gm_addresses3.csv") %>% as.data.table(key="name_original")
+t_names_merge <- merge(df,t_names,by.x="school_name",by.y="name_original",all.x=T)
+t_names_merge[year == 2018 & !is.na(gm_lon.y) & !is.na(gm_lat.y),.(dist = geosphere::distHaversine(c(first(gm_lon.x),first(gm_lat.x)),c(first(gm_lon.y),first(gm_lat.y))), nces = paste0(unique(ncessch),collapse=", ")),by=school_name] %>% arrange(desc(dist))
+#t_names_merge[year == 2018 & !is.na(gm_lon.y) & !is.na(gm_lat.y),.(dist = geosphere::distHaversine(c(first(gm_lon.x),first(gm_lat.x)),c(first(gm_lon.y),first(gm_lat.y))))]
+
+t_names_merge[.(paste0(c(gm_lon.x,gm_lat.x),c(gm_lon.y,gm_lat.y)))]
+```
+
+```{r}
+t_names_merge[ncessch == 120198002022] %>% select(ncessch, year, school_name, gm_lat.x,gm_lon.x,gm_formatted_address,gm_lat.y,gm_lon.y,gm_address)
+```
+
+```{r}
+t_names_merge[ncessch %in% 120198002022] %>% arrange(desc(max_move_dist)) %>% select(max_move_dist,ncessch,year,gm_formatted_address,street_location,city_location,zip_location,gm_lon.x,gm_lat.x,gm_lon.y,gm_lat.y,school_name,wildcard,location_verification_method, enrollment,charter,ccd_lat,ccd_lon, everything()) %>% arrange(desc(max_move_dist,ncessch,year)) %>% head(2000) %>% View
+```
+
+
+#### Looking at flags
+c - single coordinates verification. If a school only has a single pair of coordinates for all years on google maps, it is unlikely that the address(es) provided are associated with more than one location. 
+l - latlon verification. the distance between the google coordinates and manual coordinates (last batch) is less than 1000ft. The distance between the google coordinates and the geocoded coordinates is also less than 1000ft. 
+r - radius confirmation. For each school, checks if the latitude-longitude of the googlemaps lookup remains within a 1000ft radius. or it uses. Confirms that the school has never moved based on clustering of the address data provided. Not tolerant of typos. These schools have their address, latitude and longitude changed to the most frequent value in years with a valid latitude. Applies to schools that only have a single location as well. 
+R - the location moves continuously from one location to the next. 
+z - zip code in dataset and google maps lookup are the same (note that these were not looked up using the zip code, just the street, city and state)
+
+Verifications that are implemented. 
+
+```{r}
+# schools that have potential errors in the location
+df[is.na(wildcard) & !grepl("l",location_verification_method) & ncessch %!in% unique(dv$ncessch)] %>% select(ncessch,year,school_name,street_location,city_location,zip_location,gm_formatted_address,gm_lat,gm_lon,enrollment,ccd_lat,ccd_lon)
+
+# all schools in the manually sorted sections
+df[ncessch %in% unique(dv$ncessch)] %>% arrange(desc(max_move_dist)) %>% select(max_move_dist,ncessch,year,gm_formatted_address,street_location,city_location,zip_location,gm_lat,gm_lon,school_name,wildcard,location_verification_method, enrollment,charter,ccd_lat,ccd_lon, everything()) %>% head(2000) %>% View
+
+# all schools not in the manually sorted sections
+df[ncessch %!in% unique(dv$ncessch)] %>% arrange(desc(max_move_dist)) %>% select(max_move_dist,ncessch,year,gm_formatted_address,street_location,city_location,zip_location,gm_lat,gm_lon,school_name,wildcard,location_verification_method, enrollment,charter,ccd_lat,ccd_lon, everything()) %>% arrange(desc(max_move_dist,ncessch,year)) %>% head(2000) %>% View
+
+# look up single ncessch
+# look up single ncessch
+df[ncessch == 120150001477]%>% select(max_move_dist,ncessch,year,gm_formatted_address,street_location,city_location,zip_location,gm_lat,gm_lon,school_name,wildcard,location_verification_method, enrollment,charter,ccd_lat,ccd_lon, everything()) %>% head(2000) %>% View
+
+# schools with missing lat or lon
+df[is.na(gm_lat) & is.na(manual_lat_original)]
+
+df[is.na(wildcard),location_verification_method] %>% table()
+df[!is.na(wildcard),location_verification_method] %>% table()
+df[,location_verification_method] %>% table()
+```
+
+Looking
+```{r}
+# look at the number of schools flagged by each verification method. DISTANCE IN MILES
+setkey(df,ncessch,year)
+df[,.(ncessch,year,school_name,gm_formatted_address,street_location,city_location,zip_location,gm_lon,gm_lat,geo_longitude,geo_latitude,manual_lon_original,manual_lat_original,
+      gmvsgeo = geosphere::distHaversine(matrix(c(gm_lon,gm_lat),ncol=2,byrow=F), matrix(c(geo_longitude,geo_latitude),ncol=2,byrow=F))*0.000621371,
+      gmvsll = geosphere::distHaversine(matrix(c(gm_lon,gm_lat),ncol=2,byrow=F), matrix(c(manual_lon_original,manual_lat_original),ncol=2,byrow=F))*0.000621371,
+      maxdist = max(geosphere::distHaversine(matrix(c(median(gm_lon,na.rm=T),median(gm_lat,na.rm=T)),ncol=2,byrow=F), matrix(c(gm_lon,gm_lat),ncol=2,byrow=F)),na.rm=T)*0.000621371,
+      zip_in_gm_address = stringi::stri_detect_fixed(gm_formatted_address, zip_location),
+      zip_location_original, street_location_original, city_location_original, location_verification_method
+      )] %>% 
+  #filter(!zip_in_gm_address) %>% View
+  group_by(location_verification_method) %>% summarize(n=n(), gmvsgeo = mean(gmvsgeo,na.rm=T), gmvsll = mean(gmvsll,na.rm=T), maxdist = max(geosphere::distHaversine(matrix(c(median(gm_lon,na.rm=T),median(gm_lat,na.rm=T)),ncol=2,byrow=F), matrix(c(gm_lon,gm_lat),ncol=2,byrow=F)),na.rm=T))
+
+# number of schools / observations that have no verification for their address. 
+df[location_verification_method == "",ncessch] %>% unique %>% length
+
+# there are duplicates
+df[,.(.N,vals=paste0(location_verification_method,collapse=", ")),by=.(ncessch,year)][N>1]
+
+# hierarchical clustering
+lids[,.(lat = median(gm_lat,na.rm=T), lon = median(gm_lon,na.rm=T)),by=cluster]
+ggplot(lids,aes(x=gm_lon, y=gm_lat)) + geom_point()
+plot(hc)
+lids
+geosphere::distHaversine(c(-80.06602,26.72873),lids[,.(gm_lon,gm_lat)])*3.28084
+
+names(df)
+```
+
+Exloring
+```{r}
+setkey(df,ncessch,year)
+
+# schools that are not latlon verified
+df[ncessch %in% df[!stringi::stri_detect_fixed(location_verification_method, "l"),ncessch,],last(school_name),by=ncessch]#[,.(ncessch,year)]
+
+# random sample of 30 that are radius verified
+df[ncessch %in% (df[grepl("cz",location_verification_method) & !grepl("exclude",location_verification_method),ncessch]%>% sample(30))] %>% select(gm_formatted_address,gm_lat,gm_lon,street_location,city_location,zip_location,ncessch,year,school_name,location_verification_method,everything())
+
+# schools that aren't latlon verified by year
+df[!stringi::stri_detect_fixed(location_verification_method, "l"),.N,by=year] %>% arrange(desc(N))
+df[!stringi::stri_detect_fixed(location_verification_method, "l") & year==2017] %>% select(gm_formatted_address,street_location,zip_location, city_location,location_verification_method,gm_lat,gm_lon,geo_latitude,geo_longitude,latitude,longitude) %>% filter(stringi::stri_detect_fixed(gm_formatted_address,zip_location)) %>% View
+```
+
+Looking
+```{r eval=F}
+# lat/lon data post merge, including distance
+setkey(df,ncessch,year)
+df[,.(ncessch,year,school_name,gm_formatted_address,street_location,city_location,zip_location,gm_lon,gm_lat,geo_longitude,geo_latitude,manual_lon_original,manual_lat_original,
+      gmvsgeo = geosphere::distHaversine(matrix(c(gm_lon,gm_lat),ncol=2,byrow=F), matrix(c(geo_longitude,geo_latitude),ncol=2,byrow=F)),
+      gmvsll = geosphere::distHaversine(matrix(c(gm_lon,gm_lat),ncol=2,byrow=F), matrix(c(manual_lon_original,manual_lat_original),ncol=2,byrow=F)),
+      zip_in_gm_address = stringi::stri_detect_fixed(gm_formatted_address, zip_location),
+      zip_location_original, street_location_original, city_location_original, location_verification_method
+      )] %>% 
+  filter(!zip_in_gm_address) %>% View
+  #group_by(location_verification_method) %>% summarize(n=n(), gmvsgeo = mean(gmvsgeo,na.rm=T), gmvsll = mean(gmvsll,na.rm=T))
+
+# all zips associated with each street_location
+df[,.(nzips = length(unique(zip_location)),
+      zipvals = paste0(unique(zip_location),collapse=", ")),by=c("street_location","city_location")] %>% arrange(desc(nzips)) %>% filter(nzips == 1)
+```
+
+```{r eval=F}
+# LAT AND LONGq2h9 ----
+
+# look at schools that have never had a location
+df[,.(nmissing = sum(street_location %in% c("Missing/not reported","")), 
+      ntotal = .N),by=ncessch]%>%arrange(desc(nmissing/ntotal))
+
+# look at most popular addresses
+df[,sum(!is.na(ncessch)),by=.(street_location,city_location)] %>% arrange(desc(V1))
+
+# look at most popular street locations
+df$street_location %>% table %>% sort(decreasing=T)
+
+# is there a school that has never had an address and city associated
+df[,.(nstreet = sum(!is.na(street_location)), ncity = sum(!is.na(city_location))),by=ncessch] %>% arrange(nstreet,ncity)
+```
+
+Looking
+```{r}
+## Lookup a school
+{  t_num <- 120087008549
+  df[ncessch == t_num,.(street_location,city_location,zip_location,ncessch,year,school_name,gm_formatted_address,gm_lat,gm_lon,median_lat,location_verification_method,enrollment,manual_lat_original,manual_lon_original,geo_latitude,geo_longitude,school_status,key_sch,virtual_original)] %>% arrange(year) #%>% DT::datatable(width=1400)
+  #ui[ncessch == 120003000014	& year == 2009]
+}
+
+## lookup dist matrix for a school
+{  t_num <- 120108002565
+  df[ncessch == t_num & !is.na(street_location),stringdist::stringdistmatrix(.SD[,street_location],method="lcs")] -> d
+  df[ncessch == t_num & !is.na(street_location)] %>% mutate(cluster = cutree(hclust(d), h=4)) %>%
+    group_by(cluster) %>% 
+    summarize(street_location = names(sort(table(street_location),decreasing=T))[1],n=n(), latitude = first(latitude), longitude = first(longitude))
+}
+
+## grep addresses for a string
+df[ncessch %in% df[grepl("133270 HWY 90 W",street_location),ncessch],] %>% arrange(ncessch,year) %>% select(ncessch, year, school_name, street_location,city_location,zip_location, manual_lat_original,manual_lon_original,geo_latitude,geo_longitude,ccd_lat,ccd_lon,everything()) #%>% select(geo_latitude,geo_longitude) %>% unique()
+```
+
+More lookup
+```{r eval=F}
+# view closest matches to substring
+df %>% mutate(kk = nchar(street_location) - stringdist::stringdist("",street_location)) %>% arrange(desc(kk)) %>% 
+  select(ncessch,year,street_location,city_location,everything()) %>% filter(kk<6)
+
+# view observations that are in the first query but not in the second one
+t_str <- "PLACE"
+df[grepl(t_str,street_location) & !grepl(paste0("\\b",t_str,"\\b"),street_location)] %>% 
+  select(ncessch,year,street_location,city_location,everything())
+
+# all substrings of addresses, sorted by frequency
+df$street_location %>% strsplit(.," ") %>% unlist() %>% table(useNA = "always") %>% sort(decreasing = T) %>% head(80)
+
+# unique pairs of coofrinates
+df[,.(gm_lat,gm_lon)] %>% unique
+df[,.(latitude,longitude)] %>% unique
+df[,.(geo_latitude,geo_longitude)] %>% unique
+```
+
+```{r eval=F}
+# look at string dist for each individual ncessch
+df[!is.na(street_location),.(mdist = stringdist::stringdistmatrix(.SD[,street_location], method="lcs") %>% max(na.rm=T),
+      numdist = stringdist::stringdistmatrix(.SD[,gsub("[^0-9d]","",street_location)],method="lcs") %>% max(na.rm=T)),by=ncessch] %>% arrange(mdist) %>% as.data.table() -> t_d
+
+# look at number of locations associated with each street_location:city_location pair
+df[!is.na(street_location),
+   .(nlocations = nrow(unique(.SD[!is.na(geo_latitude) & !is.na(geo_longitude),.(geo_latitude,geo_longitude)]))),
+   by=.(street_location,city_location)] %>% filter(nlocations > 1)#%>% pull(nlocations) %>% table(useNA="always") #%>% ggplot(.,aes(x=nlocations)) + geom_bar()
+
+df[ncessch %in% t_d[mdist>4 & mdist<=7 & numdist==1,ncessch]] %>% select(ncessch, year, school_name,street_location, city_location,zip_location, virtual,k12_enrollment)
+
+t_d[,.(mdist=first(mdist), numdist=first(numdist)),by=ncessch]
+
+# school with distance
+df[ncessch %in% t_d[numdist > 1, ncessch]] %>% select(street_location,city_location,zip_location,everything())
+
+df[ncessch %in% df[,"Yes" %in% virtual_original & "No" %in% virtual_original,by=ncessch][V1==T,ncessch]] %>% select (ncessch, year, school_name,virtual_original, virtual,k12_enrollment) %>% fwrite("virtual.csv")
+
+names(df)
+```
+
+Data Vaslidation
+
+```{r}
+# look at schools that did not pass zip validation
+df[!grepl("z",location_verification_method)] %>% select(gm_formatted_address, zip_location,everything())
+
+df[grepl("\\&",street_location)]%>% select(gm_formatted_address, zip_location,everything())
+
+# arrange street location in order of increasing characters
+df %>% arrange((nchar(street_location))) %>% select(street_location,city_location,ncessch,year,school_name,school_type,enrollment,latitude,longitude,geo_latitude,geo_longitude,school_status,key_sch,virtual_original)
+
+# make sure that coordinates are mapped 1:1 with addresses
+if (df[,.(nrow(unique(.SD[,.(gm_lat,gm_lat)]))),by=c("street_location","city_location")] %>% pull(V1) %>% max > 1) warning("Each street_location:city_location pair is not uniquely mapped to a coorinate pair. \n")
+```
+
+
