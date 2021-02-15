@@ -1,5 +1,3 @@
-
-
 # Prepare ----
 
 
@@ -66,12 +64,14 @@ setkey(ll,ncessch,year); setkey(df,ncessch,year)
 df <- merge(df,ll,all.x=T)
 
 # Add google geocoding to final df
+# these csv files were created by src/geocode_addresses.R
 adl <- fread("src/gm_addresses.csv", na.strings = "") %>% as.data.table() %>% distinct()
 df <- merge(df,adl,by=c("street_location","city_location"),all.x=T)
 if (df[,.(.N),by=.(ncessch,year)][N>1] %>% nrow > 1) warning("\nncessch,year is not a unique key")
 # update gm_lat and gm_lon columns with second batch of query results 
 adl2 <- fread("src/gm_addresses2.csv", na.strings = "") %>% filter(!is.na(street_location)) %>% as.data.table()
 adl2[,zip_location:=as.character(zip_location)]
+# the google geocoding queries are based on street_location, city_location and zip_location so the tables are joined based on these fields
 df <- merge(df,adl2,by=c("street_location","city_location","zip_location"),all.x=T)
 names(df)[grepl("\\.x|\\.y",names(df))] -> t_names
 for (n in substr(t_names,1,nchar(t_names)-2) %>% unique) {
@@ -105,17 +105,29 @@ for (nces in df[,.(ncoords=nrow(unique(.SD[,.(gm_lat,gm_lon)]))),by=ncessch][nco
 # Data flagging & correction ----
 
 
+# The flagging system works sequentially, so that once a school has been flagged it is no longer looked at for the remaining flags
+# This allows us to sort through all of the schools that we can reasonably assume remained stationary.
+# For certain simple errors we are able to correct the data programatically as well, which greatly reduced the amount of work that has to be done manually. 
+# The flag of each school is marked in the wildcard (renamed to 'location_class') column of schools so that the type of error correction (if any) is traceable. 
+
+# dominant address is the mode address
 df[,wildcard:=as.numeric(NA)]
 df[,`:=`(median_lat=median(gm_lat,na.rm=T), median_lon=median(gm_lon,na.rm=T), dominant_address=names(sort(table(gm_formatted_address,useNA="always"),dec=T))[1],
          dominant_address_share=mean(gm_formatted_address == names(sort(table(gm_formatted_address),dec=T))[1],na.rm=T)),by=ncessch]
 
 # flag 1
+# multiplication by 3.28084 is to convert from meters to feet. 
+# any school where its location each year is no more than 1000 ft from its location every other year is flagged with wildcard=1 for all years.
+# for these schools that we flagged 1 it is safe to assume that school has remained stationary for all years that we are observing. 
 df[,.(mlat = median(gm_lat,na.rm=T), mlon = median(gm_lon,na.rm=T),
       maxdist = max(geosphere::distHaversine(c(median(gm_lon,na.rm=T),median(gm_lat,na.rm=T)), matrix(c(gm_lon,gm_lat),ncol=2,byrow=F)), na.rm=F)*3.28084
 ),by=ncessch][maxdist <= 1000,ncessch] -> t_nces
 df[ncessch %in% t_nces,wildcard:=1]
 
 # flag 2
+# flag 2 only looks at schools that have not yet been flagged
+# 2) Is this true: The address is the same over half the years, and in each year the address differs from the most common address, in the year before and after it was equal to the most common address. If yes, adopt the median latitude and median longitude associated with the address over all years. If not:
+
 setkey(df,ncessch,year)
 for (nces in df[is.na(wildcard) & dominant_address_share > 0.5,unique(ncessch)]) {
   r <- df[ncessch == nces, .(gm_formatted_address,dominant_address)]
@@ -135,12 +147,14 @@ for (nces in df[is.na(wildcard) & dominant_address_share > 0.5,unique(ncessch)])
 }
 
 # flag 3
+# 3) Is this true: The address is the same over half the years, and the latitude and longitude provided by nces are within a 1K radius for all years? If yes, adopt the median latitude and median longitude associated with the address over all years. If not:
 df[is.na(wildcard) & dominant_address_share > 0.5,.(mlat = median(ccd_lat,na.rm=T), mlon = median(ccd_lon,na.rm=T),
                                                     maxdist = max(geosphere::distHaversine(c(median(ccd_lon,na.rm=T),median(ccd_lat,na.rm=T)), matrix(c(ccd_lon,ccd_lat),ncol=2,byrow=F)), na.rm=F)*3.28084
 ),by=ncessch][maxdist <= 1000,ncessch] -> t_nces
 df[ncessch %in% t_nces,wildcard:=3]
 
 # flag 4
+# 4) Is this true: The address is the same over half the years, and takes on that common value in the first and last years. If it differs in year t, the address was the same in t-1 and t+1? If yes, adopt the median latitude and median longitude associated with the address over all years. If not:
 for (nces in df[is.na(wildcard) & dominant_address_share > 0.5,unique(ncessch)]) {
   r <- df[ncessch == nces, .(gm_formatted_address,dominant_address)]
   maddress <- r[,first(dominant_address)]
@@ -160,6 +174,7 @@ for (nces in df[is.na(wildcard) & dominant_address_share > 0.5,unique(ncessch)])
 }
 
 # flag 5
+# 5) Is this true: The address is the same over half the years, and if it differs in year t, and year t is not the first or last year, the address was the same in t-1 and t+1, if the address differs in the first or last year, the latitude and longitude provided by nces are nearly the same (I know these seem to vary randomly, so not identical, but within say 500 feet) in first year as the second year, and/or in the last year as in the second to last year? If yes, adopt the median latitude and median longitude associated with the address over all years. If not:
 for (nces in df[is.na(wildcard) & dominant_address_share > 0.5,unique(ncessch)]) {
   r <- df[ncessch == nces, .(gm_formatted_address,dominant_address,ccd_lon,ccd_lat,median_lon,median_lat)]
   maddress <- r[,first(dominant_address)]
@@ -186,6 +201,7 @@ pp = 0
 p <- function() {pp <<- pp+1; print(pp)}
 
 # flag 6
+# 6) Is this true: The latitude and longitude provided by nces are within a 1K radius for all years? If yes, adopt the median latitude and median longitude from NCES. If not:
 df[is.na(wildcard),.(mlat = median(ccd_lat,na.rm=T), mlon = median(ccd_lon,na.rm=T),
                      maxdist = max(geosphere::distHaversine(c(median(ccd_lon,na.rm=T),median(ccd_lat,na.rm=T)), matrix(c(ccd_lon,ccd_lat),ncol=2,byrow=F)), na.rm=F)*3.28084
 ),by=ncessch][maxdist <= 1000,ncessch] -> t_nces

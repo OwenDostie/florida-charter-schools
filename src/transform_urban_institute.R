@@ -1,5 +1,6 @@
 
 # read
+# Urban Institute data is read to data table 'ui'
 ui <- fread("src/ui_data_06_04_20.csv", stringsAsFactors = F, integer64 = "numeric", na.strings = c("","Missing/not reported","Not applicable","NA","†","‡","–")) %>% as.data.table
 
 # detect na
@@ -55,7 +56,5 @@ ui$distnum_schnum <-
 ui$key_sch <- paste0(ui$distnum_schnum,"_",ui$year)
 ui <- ui %>% select(-invalid_seasch)
 
-# drop schools with closed or inactive status
-
-# Data validation ----
-rm(obs)
+# clean environment
+rm(obs) -> t_

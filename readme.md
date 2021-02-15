@@ -3,7 +3,11 @@
 
 ### Manual Data Editing
 
-src/school_types_include.csv
+**src/school_types_include.csv** </br>
+This is a subset of the schools that were not easily classifiable as charter/non-charter and as regular/non-regular in the data. For each school in this list discretion was used to determine if a school is to be included in the study. For some schools only certain years are excluded. The aim is to only include charter schools and traditional public schools in years that they were operational. 
+
+**src/manually_corrected_locations.csv**</br>
+
 
 ### Data Sources
 All sources will eventually contain data 1999 through 2018, some are currently a year or two behind 2018
@@ -26,13 +30,13 @@ contains general information about:
 (https://nces.ed.gov/ccd/elsi/) downloaded 06/05/20
 
 
-**School grades datasets**(http://www.fldoe.org/accountability/accountability-reporting/school-grades/archives.stml)
+**School grades datasets** (http://www.fldoe.org/accountability/accountability-reporting/school-grades/archives.stml)
 1999 - 2017
 - Test scores
 - School grade
 
 
-**Student demographics**(https://nces.ed.gov/ccd/elsi/tableGenerator.aspx)
+**Student demographics** (https://nces.ed.gov/ccd/elsi/tableGenerator.aspx)
 1997 - 2016
 - Total enrollment
 - Highest and lowest grade
