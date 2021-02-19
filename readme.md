@@ -1,6 +1,8 @@
 ### Notes
 [Data Dictionary](https://docs.google.com/spreadsheets/d/1w-w7T3FAB0RLbvLk99KsqqPeYc_2AcSK3gtDrOsGLI0/edit#gid=188439690)
 
+
+
 ### Manual Data Editing
 
 **src/school_types_include.csv** </br>

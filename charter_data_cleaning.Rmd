@@ -17,8 +17,7 @@ options(scipen=34)
 s <- function() s_df <<- df
 l <- function() df <<- s_df
 commons <- function(k, n = 20, dec=T)  k %>% table(useNA="a") %>% sort(d=dec) %>% head(n)
-df <- fread("old versions/sch_include_07_11_20.csv", integer64="numeric")
-# ui <- fread("src/ui_data_06_04_20.csv", integer64="numeric")
+# df <- fread("sch_include_02_17_21.csv", integer64="numeric")
 # mode <- function(a)  names(sort(table(a), decreasing=T))[1]
 # rm(list = ls()[grep("t_.*",ls())])
 ```
@@ -29,6 +28,7 @@ tictoc::tic()
 # Urban Institute ----
 # ui
 source("src/transform_urban_institute.R")
+# it is intentional that NAs are introduced by coercion
 
 # Gradewise Enrollment ----
 # gwe
@@ -38,74 +38,31 @@ source("src/transform_gradewise_enr.R")
 df_old <- fread("../Research Question 1/sch_complete_05_26_20.csv", integer64 = "numeric") %>% as.data.table
 if ("V1" %in% names(df_old)) { df_old[,V1:=NULL] }
 
-# Load main df
+# Create main df
 source("src/load_df.R")
 
 # Extract and transform location data
-source("src/transform_location.R")
-
-# Performance measures
+source("src/transform_location.R") 
+# s()
+# 61586 rows
+l()
+# Extract and transform school grades & testing data
 source("src/transform_grades.R")
 
+rm(df_old,gwe,ui,sg,t_) # Remove source data from workspace
 tictoc::toc()
 
-#        df <- fread("sch_include_06_30_20.csv", integer64="numeric")
-```
-
-## School performance
-
-Create aggregate school performance columns
-```{r}
-#df <- fread("old versions/sch_include_06_30_20.csv", integer64="numeric")
-
-# generate teacher_enrollment_ratio
-df[,teacher_student_ratio:=(as.numeric(teachers_fte)/enrollment)]
-
-# abbreviate pct
-setnames(df, names(df), gsub("percente?","pct" ,names(df)))
-
-# replace names
-setnames(df, c("english_language_arts_gains_of_lowest_25%", "college_&_career_acceleration(prev_year)", "pct_of_economically_disadvantaged_students", "pct_level_3_and_above_fcat_reading" , "pct_making_learning_gains_in_reading",  "pct_making_learning_gains_in_math", "pct_of_lowest_25p_making_learning_gains_in_reading"), 
-         c("ela_gains_lowest_25","college_and_career_acc", "pct_econ_disadv_students", "pct_l3_and_above_reading","pct_making_gains_reading",  "pct_making_gains_math", "pct_lowest_25p_gains_reading"), skip_absent = T)
-
-# drop fully irrelevant columns
-df[,c("gm_street_number","gm_route","gm_postal_code"):=NULL]
-
-# grades is a character vector of all the grades
-grades <- paste0(c("k",paste0("grade",1:12)),"_enr")
-
-df[by=.(ncessch,year),,.N][N > 1,.(ncessch,year)] -> dups
-
-groupagg <- function(x) {
-  if (length(unique(x)) > 1 & is.numeric(x)) {
-    return(sum(x,na.rm=T) %>% as.double)
-  } else {
-    return(first(x))
-  }
-}
-
-# when a school grade is not unanimous remove the school
-df[dups,on=.(ncessch,year), comb_school_grade:=NA]
-
-# convert the columns we're going to aggregate to double 
-repcols = c("pct_l3_and_above_reading","pct_level_3_and_above_fcat_math","pct_level_3_and_above_writing","pct_tested","comb_ela_proficiency","comb_math_proficiency")
-df[,(repcols):=lapply(.SD,as.double),.SDcols=repcols]
-
-# correct the enrollment column for aggregated schools
-df[dups,on=.(ncessch,year),  enrollment:=rowSums(sapply(grades,function(x) df[dups,on=.(ncessch,year)][[x]])) ]
-
-# creaate aggregate columns, and then collapse duplicates from the dataset.
-df[dups,on=.(ncessch,year),by=.(ncessch,year),(repcols):=lapply(.SD*enrollment, function(x) groupagg(x)/sum(enrollment,na.rm=T)),.SDcols=repcols]
-df[dups,on=.(ncessch,year),by=.(ncessch,year),(c(grades,"enrollment")):=lapply(.SD, function(x) sum(x,na.rm=T)),.SDcols=c(grades,"enrollment")]
-
-# drop duplicate rows
-df[,ncessch_new:=substr(ncessch_new,1,12)]; df %>% distinct -> df
+# EXPORT TO CSV ----
+# fwrite(df[manual_exclude==F],"sch_include_02_18_21.csv")
+# fwrite(dm,"distance_matrix.csv")
+# fwrite(ui[!df],"sch_exclude_07_08_20.csv")
+# fwrite(df[manual_exclude==T],"sch_exclude_addl_07_08_20.csv")
 ```
 
 Exponential decay charter penetration (version 2)
 ```{r}
 # init stuff
-dm <- fread("src/distance_matrix.csv",integer64 = "double") %>% as.matrix()
+#dm <- fread("src/distance_matrix.csv",integer64 = "double") %>% as.matrix()
 grades <- paste0(c("k",paste0("grade",1:12)),"_enr")
 
 # create a list of enrollments by year. row is location ID, column is grade
@@ -145,113 +102,66 @@ seq(from=-0.005,to=-.3,by=-0.005) %>% abs %>% gsub("\\.","",.) %>% paste0(collap
 #rm(y_enr,y_cenr,t_m,dme,t_dm,t_dmc)
 ```
 
-## Make sure distaance matrix is good
 ```{r}
-library(ggplot)
-lids = df[order(location_id),.(lon=first(gm_lon),lat=first(gm_lat)),by=location_id]
 
-dm[1:20,1:20] %>% view
-dm[13,] %>% hist
+# INIT HYPPERPARAMETERS ----
+# max distance where that schools are accounted for, after this their weight is 0
+dmax_set = c(1,5,10)
+# a correspponds to the curve shape. 1 is straight line from (0,1) to (d,0), a > 1 is concave, a < 1 is convex. 
+a_set = c(0.2,1,5)
 
-dm[18,] %>% hist(breaks=300)
+# INIT OTHER ----
+# all grades to iterate through and average
+grades <- paste0(c("k",paste0("grade",1:12)),"_enr")
 
-i = 20
-i = i + 1
-i
-dm[i,] %>% hist
-
-which(dm[36,]<40) %>%
-
-dm[34,] %>% matrix
-dm[294,] %>% hist
-
-dmlids <- df[!is.na(gm_lat) & !is.na(gm_lon),.(location_id=.GRP),by=c("gm_lat","gm_lon")]
-dm <- matrix(data = as.numeric(NA), ncol=nrow(dmlids), nrow = nrow(dmlids))
-for (row in 1:nrow(dmlids)) {
-  dm[row,] <- geosphere::distHaversine(dmlids[row,.(gm_lon,gm_lat)], dmlids[,.(gm_lon,gm_lat)])
+# create a list of enrollments by year. row is location ID, column is grade
+y_enr = list()
+for (y in 1999:2018) {
+    y_enr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y, lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
+}
+# create a list of charter enrollments by year. row is location ID, column is grade
+y_cenr = list()
+for (y in 1999:2018) {
+    y_cenr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y & charter=="yes", lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
 }
 
-# convert from meters to miles
-dm <- dm*0.000621371
+#### LOOP ----
+dmax = 3; a = 1.2
+(1-(dm[1:10,1:10]/dmax)^a) %>% view
+dmf[dmf < 0] <- 0
+dmf[1:20,1:20] %>% view
+# iterate through hyperparameters
+for (dmax in dmax_set) { 
+  for (a in a_set) {
+  # apply the curving function to the distance matrix
+  dmf <- (1-(dm/dmax)^a)
+}}
 
-# fwrite(dm,"src/distance_matrix.csv")
-df <- merge(df,dmlids,all.x=T,by=c("gm_lat","gm_lon"))
-```
+for (r in c(-1)) { 
+  print(r)
+  dme <- exp(dm*r) #%>% replace(.,is.infinite(.),0)
+  rm("t_lids")
+  for (y in 1999:2018) {
+      data.table(dme %*% y_enr[[y]]) %>% setnames(.,names(.),paste0("exp_decay_",names(.))) -> t_dm
+      data.table(dme %*% y_cenr[[y]]) %>% setnames(.,names(.),paste0("exp_decay_",names(.),"_charter"))-> t_dmc
+      t_dm[,`:=`(location_id = 1:nrow(.SD), year=y)]; t_dmc[,`:=`(location_id = 1:nrow(.SD), year=y)]
+      if (!exists("t_lids")) t_lids <- merge(t_dm,t_dmc,on=.(location_id,year),all.x=T) 
+      else t_lids <- rbind(t_lids, merge(t_dm,t_dmc,on=.(location_id,year),all.x=T))
+  }
+# merge with df
+t_m <- merge(df,t_lids,all.x=T,by=c("location_id","year"))
+(rowSums((as.matrix(select(t_m, paste0("exp_decay_",grades,"_charter"))) / as.matrix(select(t_m, paste0("exp_decay_",grades,""))))  *  as.matrix(select(t_m,grades))) / as.matrix(t_m$k12_enrollment)) -> df[[paste0("exp_decay_r",abs(r))]]
 
-
-```{r}
-tid = 36 #13
-nearest = which(dm[tid,]<25 & dm[tid,]>24) %>% unname
-dists = dm[tid,nearest] %>% unname
-lids[location_id%in%nearest]
-
-makemeorange = 299 #tid
-makemepink = 300
-distHaversine(lids[makemeorange,.(lon,lat)],lids[makemepink,.(lon,lat)])/1609.34
-
-ggplot(data = df[,.(first(gm_lat),first(gm_lon)),by=location_id]) + 
-  coord_fixed(ratio=1) +
-  geom_point(aes(x=V2,y=V1),size=.2) +
-  geom_point(data=lids[location_id%in%nearest],aes(x=lon,y=lat),color="red",size=.2) +
-  geom_point(data=df[location_id == makemeorange,.(first(gm_lat),first(gm_lon))],aes(x=V2,y=V1), color = "orange",size=.8)+
-  geom_point(data=df[location_id == makemepink,.(first(gm_lat),first(gm_lon))],aes(x=V2,y=V1), color = "pink",size=.8)
-```
-
-```{r}
-lids[nearest,]
-
-distHaversine(lids[299,.(lon,lat)],lids[13,.(lon,lat)])/1609.34
-```
-
-```{r}
-dmnew <- matrix(data = as.numeric(NA), ncol=nrow(lids), nrow = nrow(lids))
-
-length(unique(df$location_id))
-max(df$location_id)
-nrow(lids)
-nrow(dm)
-distHaversine(lids[row,.(lon,lat)],lids[,.(lon,lat)])/1609.34
-for (row in 13) {
-  dmnew[row] = distHaversine(lids[row,.(lon,lat)],lids[,.(lon,lat)])
+#df <- merge(df,t_lids,all.x=T,by=c("location_id","year"))
 }
+ 
+ as.matrix(select(t_m, paste0("exp_decay_",grades,"_charter")))
+ t_lids %>% group_by(location_id,year) %>% summarize(n=n()) %>% arrange(desc(n))
+
+seq(from=-0.005,to=-.3,by=-0.005) %>% abs %>% gsub("\\.","",.) %>% paste0(collapse = " ")
+#rm(y_enr,y_cenr,t_m,dme,t_dm,t_dmc)
 ```
 
-
-```{r}
-df[location_id == 19]
-t_m[charter == "yes"] %>% select(year,location_id, grades, paste0("exp_decay_",grades,"_charter")) %>% view
-select(t_m[location_id==302 & year == 2006],grades) %>% matrix
-select(t_m[location_id==302 & year == 2006], paste0("exp_decay_",grades,"_charter")) %>% matrix
-select(t_m[location_id==302 & year == 2006], paste0("exp_decay_",grades,"")) %>% matrix
-```
-
-
-```{r}
-d = matrix(data=c(0,2,5,30,2,0,4,29,5,4,0,27,30,29,27,0),nrow=4)
-dd = exp(-d) %>% round(3)
-e = matrix(data=c(40,400,20,300,40,12,20,32),ncol=2)
-d
-e
-d%*%e
-```
-
-```{r}
-#df <- fread("sch_include_07_17_20.csv", integer64="numeric")
-setnames(df, names(df)[grepl("exp_decay_k_enr",names(df))], names(df)[grepl("exp_decay_k_enr",names(df))] %>% gsub("k_enr","grade0_enr",.))
-# drop the columns thata exp_decay was generated from
-df[,(names(df)[grepl("exp_decay_grad",names(df))]):=NULL]
-
-df[ncessch %in% df[grepl("FLORA RIDGE",school_name),unique(ncessch)]]
-
-ui[ncessch == 120087004357,] %>% select(enrollment, school_type, school_status, everything())
-
-df[charter == "yes" & distinct_cha]
-names(df)
-```
-
-
-Do the following for each row in the data set:
-Vector of enrollment of each grade element-wise multiplication with the charter tps ratio for that grade
 
 ## Analysis 
 Summary stats for new variables
@@ -299,7 +209,7 @@ names(df)
 # make sure all names will play nice in stata
 
 # k_enr -> grade0_enr
-setnames(df, names(df)[grepl("exp_decay_k_enr",names(df))], names(df)[grepl("exp_decay_k_enr",names(df))] %>% gsub("k_enr","grade0_enr",.))
+# setnames(df, names(df)[grepl("exp_decay_k_enr",names(df))], names(df)[grepl("exp_decay_k_enr",names(df))] %>% gsub("k_enr","grade0_enr",.))
 
 # abbreviate pct
 setnames(df, names(df), gsub("percente?","pct" ,names(df)))
@@ -326,7 +236,7 @@ df %>% select(
 
 # fwrite(ui[!df],"sch_exclude_07_08_20.csv")
 # fwrite(df[manual_exclude==T],"sch_exclude_addl_07_08_20.csv")
-# fwrite(df[manual_exclude==F],"sch_include_07_18_20.csv")
+fwrite(df[manual_exclude==F],"sch_include_02_17_21.csv")
 
 # validation ----
 

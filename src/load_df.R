@@ -52,6 +52,11 @@ df <- df[!is.na(Include),include:=case_when(Include == 1 ~ "ambiguous-include-ma
 # finish off ----
 
 
+
+
 # additional data validation
 if (df[,.N,by=.(ncessch,year)][N > 1] %>% nrow() > 0) warning("ncessch, year is no longer a unique key. This may be an issue with one of the merges\n")
+
+# clean environment
+rm(col,st)
 #rm(gwe,ui,df_old,st)

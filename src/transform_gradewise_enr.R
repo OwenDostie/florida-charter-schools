@@ -47,6 +47,3 @@ setnafill(gwe,fill=0)
 gwe$enrollment <- rowSums(gwe[,c(paste0("grade",1:12,"_enr"),"k_enr","prek_enr")])
 # k12_enrollment excludes prek
 gwe$k12_enrollment <- rowSums(gwe[,c(paste0("grade",1:12,"_enr"),"k_enr")])
-
-# clean environment
-rm(y,yf,pk,t_f,t_fy) -> t_

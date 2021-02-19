@@ -1,5 +1,5 @@
 # Add school grades & performance measures to the dataset
-
+	
 
 # load data
 sg14 <- fread("src/school_grades/School_Grades_1999-2014_v2.csv", integer64 = "double") %>% as.data.table
@@ -34,7 +34,7 @@ setkey(sg19,distnum_schnum,year); setkey(sg14,distnum_schnum,year)
 sg <- merge(sg19,sg14,all=T)
 sg[,`:=`(  comb_school_grade=coalesce(grade.x,grade.y), percent_tested = coalesce(percent_tested.x,percent_tested.y)  )]
 sg[,names(sg)[grep("\\.[xy]",names(sg))] := NULL]
-(df[,setdiff(names(sg),c("distnum_schnum","year")):=NULL])
+suppressWarnings(df[,setdiff(names(sg),c("distnum_schnum","year")):=NULL])
 
 # merge them with df, this will add rows; create ncessch_new
 setkey(df,distnum_schnum,year); setkey(sg,distnum_schnum,year)
@@ -46,7 +46,14 @@ df[ncessch_suffix=="_h",c(paste0("grade",c(1:8),"_enr")):=0]
 df[ncessch_suffix %in% c("_m","_h"), "k_enr":=0]
 df[,ncessch_suffix:=NULL]
 
+
 # Performance measures ----
+# Create aggregate school performance columns & other fixes
+# depending on the year there is a different measure for school grades. 
+# it is necessary to coalesce these test scores into one column for the regression.
+# any variation in the test scores will be accounted for by the year dummy. 
+
+
 names(df)
 
 # math_proficiency
@@ -60,10 +67,67 @@ df[,comb_ela_gains:=coalesce(english_language_arts_gains, percente_making_learni
 df[,comb_math_gains:=coalesce(math_gains, percente_making_learning_gains_in_math)]
 df[,comb_ela_gains_lowest_25:=coalesce(`english_language_arts_gains_of_lowest_25%`, percent_of_lowest_25p_making_learning_gains_in_reading)]
 
+# grades is a character vector of all the grades
+grades <- paste0(c("k",paste0("grade",1:12)),"_enr")
+
+# generate teacher_enrollment_ratio
+df$teacher_student_ratio <- df$teachers_fte/df$enrollment
+
+# abbreviate pct
+setnames(df, names(df), gsub("percente?","pct" ,names(df)))
+
+# replace names
+setnames(df, c("english_language_arts_gains_of_lowest_25%", "college_&_career_acceleration(prev_year)", "pct_of_economically_disadvantaged_students", "pct_level_3_and_above_fcat_reading" , "pct_making_learning_gains_in_reading",  "pct_making_learning_gains_in_math", "pct_of_lowest_25p_making_learning_gains_in_reading"), 
+         c("ela_gains_lowest_25","college_and_career_acc", "pct_econ_disadv_students", "pct_l3_and_above_reading","pct_making_gains_reading",  "pct_making_gains_math", "pct_lowest_25p_gains_reading"), skip_absent = T)
+
+# drop fully irrelevant columns
+df[,c("gm_street_number","gm_route","gm_postal_code"):=NULL]
+
+# groupagg turns a vector of numeric values to the sum, and turns a non-numeric vector to the first value
+groupagg <- function(x) {
+  if (length(unique(x)) > 1 & is.numeric(x)) {
+    return(sum(x,na.rm=T) %>% as.double)
+  } else {
+    return(first(x))
+  }
+}
+
+# when a school grade is not unanimous remove the school
+df[by=.(ncessch,year),,.N][N > 1,.(ncessch,year)] -> dups
+df[dups,on=.(ncessch,year), comb_school_grade:=NA]
+
+# convert the columns we're going to aggregate to double 
+repcols = c("pct_l3_and_above_reading","pct_level_3_and_above_fcat_math","pct_level_3_and_above_writing","pct_tested","comb_ela_proficiency","comb_math_proficiency")
+df[,(repcols):=lapply(.SD,as.double),.SDcols=repcols]
+
+# correct the enrollment column for aggregated schools
+df[dups,on=.(ncessch,year),  enrollment:=rowSums(sapply(grades,function(x) df[dups,on=.(ncessch,year)][[x]])) ]
+
+# creaate aggregate columns, and then collapse duplicates from the dataset.
+df[dups,on=.(ncessch,year),by=.(ncessch,year),(repcols):=lapply(.SD*enrollment, function(x) groupagg(x)/sum(enrollment,na.rm=T)),.SDcols=repcols]
+df[dups,on=.(ncessch,year),by=.(ncessch,year),(c(grades,"enrollment")):=lapply(.SD, function(x) sum(x,na.rm=T)),.SDcols=c(grades,"enrollment")]
+
+# drop duplicate rows
+df[,ncessch_new:=substr(ncessch_new,1,12)]; df %>% distinct -> df
+
+# order the columns the way that I like
+df %>% select(
+  ncessch,year,
+  school_name, distinct_charter, distinct_regular_nc,
+  k12_enrollment, 
+  gm_formatted_address, gm_lat,gm_lon,
+  street_location, city_location, zip_location,
+  school_type,  charter, 
+  c(names(df)[grepl(".*_enr",names(df))]),
+  location_verification_method, latlon_verification_method,
+  everything()
+) -> df
+
+# lets clean the environment
+#rm(sg14,sg19,dups,groupagg,repcols,grades)
 
 # Validation ----
 
-
-if (nrow(df) != 61744) warning("\nThere's not 61744 rows in df which is what was expected after creating ncessch_new column")
 if (df[by=year,,sum(!is.na(comb_ela_proficiency))][V1==0,nrow(.SD)] > 0) warning("\nSome years have no values for comb_ela_proficiency")
 if (sg[nchar(distnum_schnum) != 7] %>% nrow() > 0) warning("\nNot all distnum_schnum are 7 characters")
+

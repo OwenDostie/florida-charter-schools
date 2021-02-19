@@ -45,6 +45,9 @@ ui[,school_level:=tolower(school_level)]
 # fix the `charter` column
 ui[,charter:=tolower(charter)]
 
+# fix the NA values in `teachers_fte`
+suppressWarnings(ui$teachers_fte <- as.numeric(ui$teachers_fte))
+
 # create distnum schnum and key_sch
 !grepl("^\\d{2}-\\d{4}$",ui$seasch) & !grepl("^\\d{1,4}$",ui$seasch) -> ui$invalid_seasch
 ui$seasch[ui$invalid_seasch] <- NA
