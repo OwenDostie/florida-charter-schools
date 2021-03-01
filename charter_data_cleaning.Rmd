@@ -6,18 +6,19 @@ output: html_notebook
 ## Prepare
 
 Init session
-```{r echo=F}
+```{r echo=F, warning=F, message=F}
 rm(list = ls())
-library(tidyverse)
-library(data.table)
-library(stringdist)
-library(geosphere)
+library(tidyverse) # imagine not typing library(tidyverse) at the top of an R notebook
+library(data.table) # best package NA
+library(stringdist) # fuzzy string matching (for address comparison)
+library(geosphere) # distHaversine() between two latlon coordinate pairs
+#library(plm)  # fixed effects regression
 options(scipen=34)
 `%!in%` <- function(a,b) !a %in% b
 s <- function() s_df <<- df
 l <- function() df <<- s_df
 commons <- function(k, n = 20, dec=T)  k %>% table(useNA="a") %>% sort(d=dec) %>% head(n)
-# df <- fread("sch_include_02_17_21.csv", integer64="numeric")
+# df <- fread("sch_include_02_18_21.csv", integer64="numeric")
 # mode <- function(a)  names(sort(table(a), decreasing=T))[1]
 # rm(list = ls()[grep("t_.*",ls())])
 ```
@@ -61,22 +62,20 @@ tictoc::toc()
 
 Exponential decay charter penetration (version 2)
 ```{r}
-# init stuff
+# init stuff ----
 #dm <- fread("src/distance_matrix.csv",integer64 = "double") %>% as.matrix()
 grades <- paste0(c("k",paste0("grade",1:12)),"_enr")
 
-# create a list of enrollments by year. row is location ID, column is grade
-y_enr = list()
+y_enr = list(); y_cenr = list()
 for (y in 1999:2018) {
+    # create a list of enrollments by year. row is location ID, column is grade
     y_enr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y, lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
-}
-# create a list of charter enrollments by year. row is location ID, column is grade
-y_cenr = list()
-for (y in 1999:2018) {
+    # & create a list of charter enrollments by year. row is location ID, column is grade
     y_cenr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y & charter=="yes", lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
 }
 
-# iterate through hyperparameter r
+# LOOP ----
+# iterate through hyperparameters r
 for (r in c(-1)) { 
   print(r)
   dme <- exp(dm*r) #%>% replace(.,is.infinite(.),0)
@@ -104,39 +103,111 @@ seq(from=-0.005,to=-.3,by=-0.005) %>% abs %>% gsub("\\.","",.) %>% paste0(collap
 
 ```{r}
 
+
 # INIT HYPPERPARAMETERS ----
 # max distance where that schools are accounted for, after this their weight is 0
-dmax_set = c(1,5,10)
-# a correspponds to the curve shape. 1 is straight line from (0,1) to (d,0), a > 1 is concave, a < 1 is convex. 
-a_set = c(0.2,1,5)
+dmax_set = c(20,40,60,80,100)
+
+# a corresponds to the curve shape. 1 is straight line from (0,1) to (d,0), a > 1 is concave, a < 1 is convex. 
+a_set = c(1,.25,.05,5,25)#c(0.05,0.25,1,5,25)
+
 
 # INIT OTHER ----
+df <- fread("sch_include_02_18_21.csv", integer64="numeric")
+dm <- fread("src/distance_matrix.csv",integer64 = "double") %>% as.matrix()
 # all grades to iterate through and average
 grades <- paste0(c("k",paste0("grade",1:12)),"_enr")
 
-# create a list of enrollments by year. row is location ID, column is grade
-y_enr = list()
+y_enr = list(); y_cenr = list()
 for (y in 1999:2018) {
+    # create a list of enrollments by year. row is location ID, column is grade
     y_enr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y, lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
-}
-# create a list of charter enrollments by year. row is location ID, column is grade
-y_cenr = list()
-for (y in 1999:2018) {
+    # & create a list of charter enrollments by year. row is location ID, column is grade
     y_cenr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y & charter=="yes", lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
 }
 
-#### LOOP ----
-dmax = 3; a = 1.2
-(1-(dm[1:10,1:10]/dmax)^a) %>% view
-dmf[dmf < 0] <- 0
-dmf[1:20,1:20] %>% view
-# iterate through hyperparameters
-for (dmax in dmax_set) { 
-  for (a in a_set) {
-  # apply the curving function to the distance matrix
-  dmf <- (1-(dm/dmax)^a)
-}}
 
+# LOOP ----
+# iterate through all values of max distance
+for (dmax in dmax_set) { 
+  # where distance >= distance max, set the weight to 0
+  dmf <- (dm/dmax); dmf[dmf > 1] <- 1
+  
+  # iterate through all curve-shaping values
+  for (a in a_set) {
+    paste0("\na=",a,"; dmax=",dmax) %>% cat
+    # apply the curving function to the distance matrix
+    dmf <- 1-(dmf^a)
+        
+    # iterate through all years
+    for (y in 1999:2018) {
+      
+      # STUDENT PRESENCE proximate to location I, weighted by distance curving function
+      sp <- data.table(dmf %*% y_enr[[y]]); setnames(sp,paste0('sp_',grades))
+      # CHARTER STUDENT PRESENCE proximate to location I, weighted by distance curving function
+      csp <- data.table(dmf %*% y_cenr[[y]]); setnames(csp,paste0('csp_',grades))
+      # add location_id and year columns so that a join with df is possible
+      # if this throws an error it means your dm and 
+      sp[,`:=`(location_id = 1:nrow(dm), year=y)]; csp[,`:=`(location_id = 1:nrow(dm), year=y)]
+      
+      # data.table of location ids and 
+      if (y==1999) t_lids <- merge(sp,csp,on=.(location_id,year))
+      else t_lids <- rbind(t_lids, merge(sp,csp,on=.(location_id,year)))
+    }
+  
+    # generate a column representing charter student presence given dmax and a
+    t_m <- merge(select(df,location_id,year,ncessch,k12_enrollment,grades),t_lids,by=c("location_id","year"))
+    t_m[[paste0("csp","_a",a,"_dmax",dmax)]] <- (rowSums((as.matrix(select(t_m, paste0("csp_",grades))) / as.matrix(select(t_m, paste0("sp_",grades,""))))  *  as.matrix(select(t_m,grades))) / as.matrix(t_m$k12_enrollment))
+    df <- merge(df,select(t_m,year,ncessch,paste0("csp","_a",a,"_dmax",dmax)),by=c("ncessch","year"))
+  }
+}
+# suppressWarnings(rm(y_cenr,y_enr,t_lids,sp,csp,a,dmax,dmf))
+```
+
+Validation
+```{r}
+t_lids[,.N,by=.(location_id,year)][N>1]
+select(t_m,year,location_id,paste0("csp","_a",a,"_dmax",dmax))[,.N,by=.(location_id,year)][N>3]
+
+merge(df[,.N,by=.(ncessc,year)][N>3],t_m,by=c("location_id","year"))      #[,.N,by=.(location_id,year)][N>3]
+
+
+
+if (setdiff(unique(df$location_id),c(1:nrow(dm)))) print("DF and DM do not have matching location_id")
+```
+
+
+```{r}
+# plot the current results of the distance function
+plot(dm[1,],dmf[1,],xlim=c(0,10))
+
+(dmf %*% y_enr[[y]])[lid,]
+
+lid = 1; rad = 5
+df[location_id == 1]
+```
+
+Visualize a set of location_id on map
+```{r}
+# library(ggplot2)
+lid = sample(df$location_id,1); rad = 5; y = 2018
+lid = 13
+colorset = (which(dm[lid,]<rad) %>% unname)
+
+# plot it 
+ggplot(df) + 
+  coord_fixed() + 
+  geom_point(aes(x=gm_lon,y=gm_lat,color=location_id%in%colorset),size=0.01) + 
+  geom_point(data = df[location_id == lid],aes(x=gm_lon,y=gm_lat),size = 0.2, color = "black")
+
+# view all rows in year with lid
+df[year == y & location_id %in% colorset] %>% select(grades,everything()) %>% view
+# view results of multiplication at LID
+(dmf %*% y_enr[[y]])[lid,]
+```
+
+
+```{r}
 for (r in c(-1)) { 
   print(r)
   dme <- exp(dm*r) #%>% replace(.,is.infinite(.),0)
@@ -154,6 +225,8 @@ t_m <- merge(df,t_lids,all.x=T,by=c("location_id","year"))
 
 #df <- merge(df,t_lids,all.x=T,by=c("location_id","year"))
 }
+
+# ----
  
  as.matrix(select(t_m, paste0("exp_decay_",grades,"_charter")))
  t_lids %>% group_by(location_id,year) %>% summarize(n=n()) %>% arrange(desc(n))
@@ -162,6 +235,17 @@ seq(from=-0.005,to=-.3,by=-0.005) %>% abs %>% gsub("\\.","",.) %>% paste0(collap
 #rm(y_enr,y_cenr,t_m,dme,t_dm,t_dmc)
 ```
 
+Fixed effects regression in R
+```{r}
+dfp <- pdata.frame(df,index=c("ncessch","year"))
+test <- plm(math~teacher_student_ratio,data=dfp,model="within")
+predict(test)
+str(test)
+test$coefficients
+test %>% str
+
+dfp %>% filter(ncessch == 120003000002) %>% select(math, teacher_student_ratio)
+```
 
 ## Analysis 
 Summary stats for new variables
