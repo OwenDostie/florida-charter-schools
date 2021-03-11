@@ -12,13 +12,14 @@ library(tidyverse) # imagine not typing library(tidyverse) at the top of an R no
 library(data.table) # best package NA
 library(stringdist) # fuzzy string matching (for address comparison)
 library(geosphere) # distHaversine() between two latlon coordinate pairs
-#library(plm)  # fixed effects regression
+library(Matrix) # sparse matrix multiplication is sped up
+library(plm)  # fixed effects regression
 options(scipen=34)
 `%!in%` <- function(a,b) !a %in% b
 s <- function() s_df <<- df
 l <- function() df <<- s_df
 commons <- function(k, n = 20, dec=T)  k %>% table(useNA="a") %>% sort(d=dec) %>% head(n)
-# df <- fread("sch_include_02_18_21.csv", integer64="numeric")
+df <- fread("sch_include_03_01_21.csv", integer64="numeric")
 # mode <- function(a)  names(sort(table(a), decreasing=T))[1]
 # rm(list = ls()[grep("t_.*",ls())])
 ```
@@ -54,62 +55,25 @@ rm(df_old,gwe,ui,sg,t_) # Remove source data from workspace
 tictoc::toc()
 
 # EXPORT TO CSV ----
-# fwrite(df[manual_exclude==F],"sch_include_02_18_21.csv")
+# fwrite(df[manual_exclude==F],"sch_include_03_01_21.csv")
 # fwrite(dm,"distance_matrix.csv")
 # fwrite(ui[!df],"sch_exclude_07_08_20.csv")
 # fwrite(df[manual_exclude==T],"sch_exclude_addl_07_08_20.csv")
 ```
 
-Exponential decay charter penetration (version 2)
+Generate charter student presence measure
 ```{r}
-# init stuff ----
-#dm <- fread("src/distance_matrix.csv",integer64 = "double") %>% as.matrix()
-grades <- paste0(c("k",paste0("grade",1:12)),"_enr")
+# 244.114/196.847 seconds with sparse matrix
+# 375.247 seconds without sparse matrix
 
-y_enr = list(); y_cenr = list()
-for (y in 1999:2018) {
-    # create a list of enrollments by year. row is location ID, column is grade
-    y_enr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y, lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
-    # & create a list of charter enrollments by year. row is location ID, column is grade
-    y_cenr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y & charter=="yes", lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
-}
-
-# LOOP ----
-# iterate through hyperparameters r
-for (r in c(-1)) { 
-  print(r)
-  dme <- exp(dm*r) #%>% replace(.,is.infinite(.),0)
-  rm("t_lids")
-  for (y in 1999:2018) {
-      data.table(dme %*% y_enr[[y]]) %>% setnames(.,names(.),paste0("exp_decay_",names(.))) -> t_dm
-      data.table(dme %*% y_cenr[[y]]) %>% setnames(.,names(.),paste0("exp_decay_",names(.),"_charter"))-> t_dmc
-      t_dm[,`:=`(location_id = 1:nrow(.SD), year=y)]; t_dmc[,`:=`(location_id = 1:nrow(.SD), year=y)]
-      if (!exists("t_lids")) t_lids <- merge(t_dm,t_dmc,on=.(location_id,year),all.x=T) 
-      else t_lids <- rbind(t_lids, merge(t_dm,t_dmc,on=.(location_id,year),all.x=T))
-  }
-# merge with df
-t_m <- merge(df,t_lids,all.x=T,by=c("location_id","year"))
-(rowSums((as.matrix(select(t_m, paste0("exp_decay_",grades,"_charter"))) / as.matrix(select(t_m, paste0("exp_decay_",grades,""))))  *  as.matrix(select(t_m,grades))) / as.matrix(t_m$k12_enrollment)) -> df[[paste0("exp_decay_r",abs(r))]]
-
-#df <- merge(df,t_lids,all.x=T,by=c("location_id","year"))
-}
- 
- as.matrix(select(t_m, paste0("exp_decay_",grades,"_charter")))
- t_lids %>% group_by(location_id,year) %>% summarize(n=n()) %>% arrange(desc(n))
-
-seq(from=-0.005,to=-.3,by=-0.005) %>% abs %>% gsub("\\.","",.) %>% paste0(collapse = " ")
-#rm(y_enr,y_cenr,t_m,dme,t_dm,t_dmc)
-```
-
-```{r}
-
+tictoc::tic()
 
 # INIT HYPPERPARAMETERS ----
 # max distance where that schools are accounted for, after this their weight is 0
 dmax_set = c(20,40,60,80,100)
 
 # a corresponds to the curve shape. 1 is straight line from (0,1) to (d,0), a > 1 is concave, a < 1 is convex. 
-a_set = c(1,.25,.05,5,25)#c(0.05,0.25,1,5,25)
+a_set = c(0.05,0.25,1,5,25)
 
 
 # INIT OTHER ----
@@ -137,15 +101,15 @@ for (dmax in dmax_set) {
   for (a in a_set) {
     paste0("\na=",a,"; dmax=",dmax) %>% cat
     # apply the curving function to the distance matrix
-    dmf <- 1-(dmf^a)
+    dmf <- Matrix(1-(dmf^a),sparse=T)
         
     # iterate through all years
     for (y in 1999:2018) {
       
       # STUDENT PRESENCE proximate to location I, weighted by distance curving function
-      sp <- data.table(dmf %*% y_enr[[y]]); setnames(sp,paste0('sp_',grades))
+      sp <- data.table(as.matrix(dmf %*% y_enr[[y]])); setnames(sp,paste0('sp_',grades))
       # CHARTER STUDENT PRESENCE proximate to location I, weighted by distance curving function
-      csp <- data.table(dmf %*% y_cenr[[y]]); setnames(csp,paste0('csp_',grades))
+      csp <- data.table(as.matrix(dmf %*% y_cenr[[y]])); setnames(csp,paste0('csp_',grades))
       # add location_id and year columns so that a join with df is possible
       # if this throws an error it means your dm and 
       sp[,`:=`(location_id = 1:nrow(dm), year=y)]; csp[,`:=`(location_id = 1:nrow(dm), year=y)]
@@ -162,21 +126,12 @@ for (dmax in dmax_set) {
   }
 }
 # suppressWarnings(rm(y_cenr,y_enr,t_lids,sp,csp,a,dmax,dmf))
+tictoc::toc()
 ```
 
-Validation
-```{r}
-t_lids[,.N,by=.(location_id,year)][N>1]
-select(t_m,year,location_id,paste0("csp","_a",a,"_dmax",dmax))[,.N,by=.(location_id,year)][N>3]
+## Regressions & Analysis
 
-merge(df[,.N,by=.(ncessc,year)][N>3],t_m,by=c("location_id","year"))      #[,.N,by=.(location_id,year)][N>3]
-
-
-
-if (setdiff(unique(df$location_id),c(1:nrow(dm)))) print("DF and DM do not have matching location_id")
-```
-
-
+TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST
 ```{r}
 # plot the current results of the distance function
 plot(dm[1,],dmf[1,],xlim=c(0,10))
@@ -184,105 +139,93 @@ plot(dm[1,],dmf[1,],xlim=c(0,10))
 (dmf %*% y_enr[[y]])[lid,]
 
 lid = 1; rad = 5
-df[location_id == 1]
 ```
 
 Visualize a set of location_id on map
 ```{r}
 # library(ggplot2)
-lid = sample(df$location_id,1); rad = 5; y = 2018
-lid = 13
-colorset = (which(dm[lid,]<rad) %>% unname)
+lid = sample(df$location_id,1); rad = 5; y = 1999; maprad=20; lid = 1
+radset = (which(dm[lid,]<rad) %>% unname)
+mapradset = (which(dm[lid,]<maprad) %>% unname)
+
 
 # plot it 
-ggplot(df) + 
+ggplot(df[location_id %in% mapradset]) + 
   coord_fixed() + 
-  geom_point(aes(x=gm_lon,y=gm_lat,color=location_id%in%colorset),size=0.01) + 
+  geom_point(aes(x=gm_lon,y=gm_lat,color=location_id%in%radset),size=0.5) + 
   geom_point(data = df[location_id == lid],aes(x=gm_lon,y=gm_lat),size = 0.2, color = "black")
 
+# density plot
+y=2018
+ggplot(df[location_id %in% radset & year == y],aes(x=gm_lon,y=gm_lat)) + 
+  coord_fixed() + 
+  #geom_point(aes(x=gm_lon,y=gm_lat,alpha=location_id%in%radset,color=charter,size=0.05)) + 
+  geom_text(aes(label=k_enr+grade1_enr+grade2_enr+grade3_enr+grade4_enr+grade5_enr,color=charter))+
+  geom_point(data = df[location_id == lid],aes(x=gm_lon,y=gm_lat),size = 0.2, color = "black")
+
+# sum of charter & tps enrollment in the given radius and year
+q1 <- df[location_id %in% radset,.(
+                             allschools = sum(k_enr+grade1_enr+grade2_enr+grade3_enr+grade4_enr+grade5_enr),
+                             charterschools=sum((charter=="yes")*(k_enr+grade1_enr+grade2_enr+grade3_enr+grade4_enr+grade5_enr))
+                             ),by=year] %>% mutate(ratio=charterschools/allschools)
+
+# charter penetration
+q2 <- df[location_id == lid] %>% select(location_id,year,csp_a1_dmax20, csp_a0.25_dmax20, csp_a0.05_dmax20, csp_a5_dmax20, csp_a25_dmax20)
+
+merge(q1,q2,on=year) %>% view
+
 # view all rows in year with lid
-df[year == y & location_id %in% colorset] %>% select(grades,everything()) %>% view
+df[year == y & location_id %in% radset] %>% select(grades,everything()) %>% view
 # view results of multiplication at LID
 (dmf %*% y_enr[[y]])[lid,]
 ```
 
-
-```{r}
-for (r in c(-1)) { 
-  print(r)
-  dme <- exp(dm*r) #%>% replace(.,is.infinite(.),0)
-  rm("t_lids")
-  for (y in 1999:2018) {
-      data.table(dme %*% y_enr[[y]]) %>% setnames(.,names(.),paste0("exp_decay_",names(.))) -> t_dm
-      data.table(dme %*% y_cenr[[y]]) %>% setnames(.,names(.),paste0("exp_decay_",names(.),"_charter"))-> t_dmc
-      t_dm[,`:=`(location_id = 1:nrow(.SD), year=y)]; t_dmc[,`:=`(location_id = 1:nrow(.SD), year=y)]
-      if (!exists("t_lids")) t_lids <- merge(t_dm,t_dmc,on=.(location_id,year),all.x=T) 
-      else t_lids <- rbind(t_lids, merge(t_dm,t_dmc,on=.(location_id,year),all.x=T))
-  }
-# merge with df
-t_m <- merge(df,t_lids,all.x=T,by=c("location_id","year"))
-(rowSums((as.matrix(select(t_m, paste0("exp_decay_",grades,"_charter"))) / as.matrix(select(t_m, paste0("exp_decay_",grades,""))))  *  as.matrix(select(t_m,grades))) / as.matrix(t_m$k12_enrollment)) -> df[[paste0("exp_decay_r",abs(r))]]
-
-#df <- merge(df,t_lids,all.x=T,by=c("location_id","year"))
-}
-
-# ----
- 
- as.matrix(select(t_m, paste0("exp_decay_",grades,"_charter")))
- t_lids %>% group_by(location_id,year) %>% summarize(n=n()) %>% arrange(desc(n))
-
-seq(from=-0.005,to=-.3,by=-0.005) %>% abs %>% gsub("\\.","",.) %>% paste0(collapse = " ")
-#rm(y_enr,y_cenr,t_m,dme,t_dm,t_dmc)
-```
-
 Fixed effects regression in R
 ```{r}
+# init
+dmax_set = c(20,40,60,80,100); a_set = c(0.05,0.25,1,5,25)
+
+# create panel data frame
 dfp <- pdata.frame(df,index=c("ncessch","year"))
-test <- plm(math~teacher_student_ratio,data=dfp,model="within")
-predict(test)
-str(test)
-test$coefficients
-test %>% str
+dfp %>% str
+
+# test FE regression
+r <- plm(comb_math_proficiency~csp_a1_dmax20,data=dfp,model="within"); r
+
+# test FE regression
+r <- plm(diff(comb_math_proficiency)~csp_a1_dmax20,data=dfp,model="within"); r
+
+# test FE regression
+r <- plm(diff(comb_math_proficiency)~csp_a1_dmax20 + year,
+         data=dfp, model="within"); r
+
+# full regression
+r <- plm(diff(comb_math_proficiency,1)~diff(comb_math_proficiency,lag=c(1:6)) + diff(csp_a1_dmax20,lag=c(0:6)) + year,
+         data=dfp, model="within"); r
+
+
+# test FE regression with year effects
+f <- as.formula(paste("comb_math_proficiency~","csp_a1_dmax20 + lag(csp_a1_dmax20) + year"))
+plm(f,data=dfp,model="within")
+
+# iterate through all fixed-effects regressions
+for (c in paste0("csp_a",a_set,paste0("_dmax",dmax_set))) {
+  r <- plm(comb_math_proficiency~get(c),data=dfp,model="within")
+  print(c)
+  print(r)
+}
 
 dfp %>% filter(ncessch == 120003000002) %>% select(math, teacher_student_ratio)
 ```
 
-## Analysis 
-Summary stats for new variables
+Playing with plm
 ```{r}
-df <- fread("sch_include_07_18_20.csv", integer64="numeric")
+r <- plm(diff(comb_math_proficiency,0)~diff(comb_math_proficiency,c(2:7)) + diff(csp_a1_dmax20,c(0:6)) + year,
+         data=dfp, model="within"); r
 
-df %>% select(weighted_pct_charter_10m) %>% filter(weighted_pct_charter_10m > 0) %>% skimr::skim()
-df %>% select(weighted_pct_charter_5m) %>% filter(weighted_pct_charter_5m > 0) %>% skimr::skim()
-df %>% select(weighted_pct_charter_2.5m) %>% filter(weighted_pct_charter_2.5m > 0) %>% skimr::skim()
-df %>% select(weighted_pct_charter_1m) %>% filter(weighted_pct_charter_1m > 0) %>% skimr::skim()
+diff(dfp$comb_math_proficiency,lag=c(2:6))
 
-df %>% select(comb_ela_proficiency) %>% hist()
-df[,comb_ela_proficiency] %>% hist
-df[,comb_ela_proficiency] %>% hist
-```
-
-```{r}
-df$year %>% max
-```
-
-```{r}
-ns <- sample(df[by=.(ncessch),,.N][N>10,ncessch],500)
-
-df[by=year,,sum(!is.na(comb_math_proficiency))]
-
-df[charter == "no",.(nyears=.N, maxratio1m=max(log(1+weighted_ctr_1m)),maxratio2.5m=max(log(1+weighted_ctr_2.5m)),maxratio5m=max(log(1+weighted_ctr_5m)),maxratio10m=max(log(1+weighted_ctr_10m)),maxfte = max(teachers_fte,na.rm=T)),  by=.(ncessch)][nyears > 5] %>%
-  #skimr::skim()
-  #ggplot(.) + geom_density(aes(x=c(maxratio1m),color="1m"),alpha=0.3,) + geom_density(aes(x=c(maxratio2.5m),color="2.5m"),alpha=0.3,) + geom_density(aes(x=c(maxratio5m),color="5m"),alpha=0.3,) + geom_density(aes(x=c(maxratio10m),color="10m"),alpha=0.3,)
-  ggplot(.,aes(x=year,y=maxfte,fill=maxratio5m>0))
-
-df %>% select(teachers_fte)
-df[charter == "no", by=.(year,weighted_ctr_5m>0), .(mean(as.numeric(comb_math_proficiency),na.rm=T), sd(teachers_fte,na.rm=T))][!is.na(weighted_ctr_5m)] %>% ggplot(.,aes(x=year,y=V1,fill=weighted_ctr_5m)) + geom_bar(stat="identity", position="dodge")
-
-
-df[weighted_ctr_1m %>% is.na]
-df[enrollment == prek_enr]
-names(df)
+data.frame("first difference"=diff(dfp$comb_math_proficiency),"thevalue"=dfp$comb_math_proficiency,diff(dfp$comb_math_proficiency,lag=c(1:6)))
 ```
 
 ## Export
