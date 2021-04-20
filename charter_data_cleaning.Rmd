@@ -14,6 +14,10 @@ library(stringdist) # fuzzy string matching (for address comparison)
 library(geosphere) # distHaversine() between two latlon coordinate pairs
 library(Matrix) # sparse matrix multiplication is sped up
 library(plm)  # fixed effects regression
+library(gtools) # combinations 
+library(tictoc) # benchmarking
+# library(texreg) # display regression results better
+
 options(scipen=34)
 `%!in%` <- function(a,b) !a %in% b
 s <- function() s_df <<- df
@@ -131,15 +135,61 @@ tictoc::toc()
 
 ## Regressions & Analysis
 
-TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST
+Delete anything in here:
 ```{r}
-# plot the current results of the distance function
-plot(dm[1,],dmf[1,],xlim=c(0,10))
+a = 0.05; dmax = 20; depvar = "combined_proficiency"
 
-(dmf %*% y_enr[[y]])[lid,]
+r <- plm(as.formula(paste(depvar," ~ year + character(ncessch) +lag(csp_a",a,"_dmax",dmax,",",lags,")",sep="")), 
+              data=dfp, model="within")
+r %>% summary
+r.squared(r)
 
-lid = 1; rad = 5
+dfp
 ```
+
+Fixed effects regression in R
+```{r}
+tic()
+# init
+dmax_set = c(20,40,60,80,100); a_set = c(0.05,0.25,1,5,25); depvar_set = "combined_proficiency"; 
+lags_set = combinations(7,2,c(0:6)); lags_set = paste(lags_set[,1],lags_set[,2],sep=":"); lags_set = "0:6"
+regs = data.table(dmax = numeric(), a = numeric(),lags = character(),rsquared = numeric(),depvar = character())
+
+# create panel data frame
+dfp <- pdata.frame(df[charter=="no"],index=c("ncessch","year"))
+dfp$combined_proficiency <- (dfp$comb_math_proficiency + dfp$comb_ela_proficiency)/2
+
+# iterate through all fixed-effects regressions
+for (dmax in dmax_set) {
+  for (a in a_set) {
+    for (depvar in depvar_set) {
+      for (lags in lags_set) {
+            r <- plm(as.formula(paste(depvar," ~ year + lag(csp_a",a,"_dmax",dmax,",",lags,")",sep="")), 
+              data=dfp, model="within")
+            regs <- rbind(regs,list(dmax,a,lags,r.squared(r),depvar))      
+      }
+    }
+  }
+}
+toc() ## 33sec
+regs
+```
+
+more
+```{r}
+# base regression, equivalent to:
+# xtreg d.comb_math_proficiency l(1/6)d.comb_math_proficiency l(0/6)d.csp_a1_dmax20 i.year, fe
+r <- plm(diff(comb_math_proficiency)~lag(diff(comb_math_proficiency), 1:6) + lag(diff(csp_a1_dmax20),0:6) + year, data=dfp, model="within"); summary(r)
+
+# test FE regression with year effects
+f <- as.formula(paste("comb_math_proficiency~","csp_a1_dmax20 + lag(csp_a1_dmax20) + year"))
+plm(f,data=dfp,model="within")
+
+
+dfp %>% filter(ncessch == 120003000002) %>% select(math, teacher_student_ratio)
+```
+
+----------
 
 Visualize a set of location_id on map
 ```{r}
@@ -180,42 +230,37 @@ df[year == y & location_id %in% radset] %>% select(grades,everything()) %>% view
 (dmf %*% y_enr[[y]])[lid,]
 ```
 
-Fixed effects regression in R
+Manuel FE Regression
 ```{r}
-# init
-dmax_set = c(20,40,60,80,100); a_set = c(0.05,0.25,1,5,25)
+df[order(year),.(year,comb_math_proficiency,
+                 d.FE.comb_math_proficiency=c(NA,diff(comb_math_proficiency))-mean(diff(comb_math_proficiency))
+                 ),by=.(ncessch)][!is.na(comb_math_proficiency)]
 
-# create panel data frame
-dfp <- pdata.frame(df,index=c("ncessch","year"))
-dfp %>% str
+# create differenced outcome measures subtracting the mean as a proxy for FE regression
+df[order(year),`:=`(
+  d.FE.comb_math_proficiency=(c(NA,diff(comb_math_proficiency))-mean(diff(comb_math_proficiency))),
+  d.FE.comb_ela_proficiency=(c(NA,diff(comb_ela_proficiency))-mean(diff(comb_ela_proficiency))),
+  d.FE.comb_avg_proficiency=(c(NA,diff(comb_ela_proficiency+comb_math_proficiency)/2)-mean(diff(comb_ela_proficiency+comb_math_proficiency)/2))
+  ),by=.(ncessch)]
 
-# test FE regression
-r <- plm(comb_math_proficiency~csp_a1_dmax20,data=dfp,model="within"); r
+# create lags of these differences, and of charter competition
+df[order(year), `:=`(
+  l1d.FE.comb_math_proficiency=shift(c(NA,diff(comb_math_proficiency)-mean(diff(comb_math_proficiency))),1),
+  l2d.FE.comb_math_proficiency=shift(c(NA,diff(comb_math_proficiency)-mean(diff(comb_math_proficiency))),2),
+  l3d.FE.comb_math_proficiency=shift(c(NA,diff(comb_math_proficiency)-mean(diff(comb_math_proficiency))),3),
+  l4d.FE.comb_math_proficiency=shift(c(NA,diff(comb_math_proficiency)-mean(diff(comb_math_proficiency))),4),
+  l5d.FE.comb_math_proficiency=shift(c(NA,diff(comb_math_proficiency)-mean(diff(comb_math_proficiency))),5),
+  l6d.FE.comb_math_proficiency=shift(c(NA,diff(comb_math_proficiency)-mean(diff(comb_math_proficiency))),6),
+  
+)]
 
-# test FE regression
-r <- plm(diff(comb_math_proficiency)~csp_a1_dmax20,data=dfp,model="within"); r
+df[,.()]
+df[order(year),.(comb_math_proficiency, shift(comb_math_proficiency,1),l1d.FE.comb_math_proficiency),by=.(ncessch)]
 
-# test FE regression
-r <- plm(diff(comb_math_proficiency)~csp_a1_dmax20 + year,
-         data=dfp, model="within"); r
+lm(data=df,
+  d.FE.comb_avg_proficiency~lag(d.FE.comb_avg_proficiency))
 
-# full regression
-r <- plm(diff(comb_math_proficiency,1)~diff(comb_math_proficiency,lag=c(1:6)) + diff(csp_a1_dmax20,lag=c(0:6)) + year,
-         data=dfp, model="within"); r
-
-
-# test FE regression with year effects
-f <- as.formula(paste("comb_math_proficiency~","csp_a1_dmax20 + lag(csp_a1_dmax20) + year"))
-plm(f,data=dfp,model="within")
-
-# iterate through all fixed-effects regressions
-for (c in paste0("csp_a",a_set,paste0("_dmax",dmax_set))) {
-  r <- plm(comb_math_proficiency~get(c),data=dfp,model="within")
-  print(c)
-  print(r)
-}
-
-dfp %>% filter(ncessch == 120003000002) %>% select(math, teacher_student_ratio)
+df[,.(ncessch, year, d.FE.comb_avg_proficiency, lag(d.FE.comb_avg_proficiency,0:2))]
 ```
 
 Playing with plm
