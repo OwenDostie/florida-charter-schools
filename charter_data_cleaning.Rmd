@@ -26,7 +26,6 @@ s <- function() s_df <<- df
 l <- function() df <<- s_df
 commons <- function(k, n = 20, dec=T)  k %>% table(useNA="a") %>% sort(d=dec) %>% head(n)
 df <- fread("sch_include_03_01_21.csv", integer64="numeric")
-df <- fread("df_mini.csv", integer64="numeric")
 # mode <- function(a)  names(sort(table(a), decreasing=T))[1]
 # rm(list = ls()[grep("t_.*",ls())])
 ```
