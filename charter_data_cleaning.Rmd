@@ -17,6 +17,7 @@ library(plm)  # fixed effects regression
 library(gtools) # combinations 
 library(tictoc) # benchmarking
 library(parallel) # faster computation
+library(caret) # k-fold cross validation
 # library(texreg) # display regression results better
 
 options(scipen=34)
@@ -25,6 +26,7 @@ s <- function() s_df <<- df
 l <- function() df <<- s_df
 commons <- function(k, n = 20, dec=T)  k %>% table(useNA="a") %>% sort(d=dec) %>% head(n)
 df <- fread("sch_include_03_01_21.csv", integer64="numeric")
+df <- fread("df_mini.csv", integer64="numeric")
 # mode <- function(a)  names(sort(table(a), decreasing=T))[1]
 # rm(list = ls()[grep("t_.*",ls())])
 ```
@@ -146,48 +148,124 @@ tictoc::toc()
 
 Delete anything in here:
 ```{r}
-dfp$ncessch %>% unique %>% length()
-dfp$year %>% unname
+t_func <- function(i) {
+  2*i
+  
+}
 
-as.numeric(levels(dfp$year))
-matrix(data = c(dfp$year %>% unname,dfp$year %>% as.numeric),ncol=2)
+tic(); mclapply(1:nrow(g), t_func); toc()
+```
+
+Model that will estimate runtime of program
+```{r}
+tt_ = data.table(nrows = c(1000,2000,3600,8000,12000,5341,14000,16000,20000,53468),time = c(0.216,0.423,1.366,5.899,16.415,2.436,23.395,33.836,60.7,868.486))
+tm_ <- lm(time ~ nrows + I(nrows^2),tt_)
+tm_ %>% summary()
+predict(tm_, newdata=data.frame(nrows = 53468))
+    # with 20,000 rows the model predicts 55 seconds
+    # with 53,468 observations the model predicts 533.2522 seconds. I predict it will take 600 seconds. It actually took 868
+    # 868 * 525 / 3  is the total runtime with parallelization, but no crossfold validation. 41 hours, could be much longer. 20 hours with 10fold, using all 6 lags. LOOCV seems out of the question.  
+ggplot(tt_) + geom_point(aes(x=nrows,y=time))
 ```
 
 Fixed effects regression in R
 ```{r}
 # init
-dmax_set = c(20,40,60,80,100)[1]; a_set = c(0.05,0.25,1,5,25)[1]; depvar_set = "combined_proficiency"; 
+dmax_set = c(20,40,60,80,100); a_set = c(0.05,0.25,1,5,25); depvar_set = "combined_proficiency"; 
 lags_set = combinations(7,2,c(0:6)); lags_set = paste(lags_set[,1],lags_set[,2],sep=":"); lags_set = "0:6"
-regs = data.table(dmax = numeric(), a = numeric(),lags = character(),rsquared = numeric(),depvar = character())
+n_folds = 10
+
 
 # create panel data frame 
-dfp <- pdata.frame(df[charter=="no"],index=c("ncessch","year"))
+dfp <- pdata.frame(df[charter=="no"],index=c("ncessch","year")) %>% head(500)
 dfp$combined_proficiency <- (dfp$comb_math_proficiency + dfp$comb_ela_proficiency)/2
 
-# 2-3 seconds for 1 iteration
-for (h in c(100)) {
-    tic()
-    # iterate through all fixed-effects regressions
-    for (dmax in dmax_set) {
-      for (a in a_set) {
-        for (depvar in depvar_set) {
-          for (lags in lags_set) {
-                r <- plm(as.formula(paste(depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",a,"_dmax",dmax,",",lags,")",sep="")), 
-                  data=dfp %>% head(h), model="within")
-                regs <- rbind(regs,list(dmax,a,lags,r.squared(r),depvar))      
-          }
-        }
-      }
-    }
-    print(toc(format=F))
-    
+
+# init gridsearch and plm functionn
+g <- expand.grid(dmax = dmax_set,a = a_set, depvar = depvar_set, lags = lags_set, stringsAsFactors=F)
+rr <- function(i) {
+  r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp, model="within")
+  data.frame(g[i,]$dmax,g[i,]$a,g[i,]$lags,r.squared(r),g[i,]$depvar)
 }
 
-r %>% summary
-# regs
+
+# run regression on each row of grid
+tic(); regression_results <- mclapply(1:nrow(g), rr) %>% bind_rows; toc()
+# rename the results
+regression_results %>% setnames(.,c("max_distance","alpha","lags","rsquared","depvar"))
+
+# 
+# r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp[-fold[[i]],], model="within")
+# 
+# 
+# # DEBUGG THISS
+# r.squared(r,dfp[fold[[2]],])
+# 
+# # ____  READ SOURCE CODE LUL ____
+# r.squared
+# methods("fitted")
+#   getAnywhere(fitted.plm)
+#     getAnywhere(model.matrix.plm)
+#     getAnywhere(model.matrix)
+#       getAnywhere(model.frame.pdata.frame)
+#     
+# stats:::model.frame
+# methods(model.frame)
+#     
+# getAnywhere(describe)
+# 
+# 
+# is.null(r$model)
+# 
+# fold <- createFolds(1:nrow(dfp),n_folds)
+# for (i in 1:n_folds) {
+#   r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp[-fold[[i]],], model="within")
+#   r.squared(r,)
+#   summary(r)
+# }
+# 
+# predict(r,dfp[fold[[1]],])
+# 
+# myrsquared(r,dfp[fold[[1]],])
 ```
 
-more
+```{r}
+# myrsquared <- function (object, model = NULL, type = c("cor", "rss", "ess"), 
+#     dfcor = FALSE) 
+# {
+#     if (is.null(model)) 
+#         model <- describe(object, "model")
+#     effect <- describe(object, "effect")
+#     type <- match.arg(type)
+#     if (type == "cor") {
+#       print(1)
+#         y <- pmodel.response(object, model = model, effect = effect)
+#         print(2)
+#         haty <- fitted(object, model = model, effect = effect)
+#         print(3)
+#         R2 <- cor(y, haty)^2
+#     }
+#     if (type == "rss") {
+#         R2 <- 1 - deviance(object, model = model)/tss(object, 
+#             model = model)
+#     }
+#     if (type == "ess") {
+#         haty <- fitted(object, model = model)
+#         mhaty <- mean(haty)
+#         ess <- as.numeric(crossprod((haty - mhaty)))
+#         R2 <- ess/tss(object, model = model)
+#     }
+#     if (dfcor) 
+#         R2 <- 1 - (1 - R2) * (length(resid(object)) - 1)/df.residual(object)
+#     R2
+# }
+# environment(myrsquared) <- 
+```
+
+```{r}
+predict(r,dfp[fold[[1]],])
+```
+
 ```{r}
 # base regression, equivalent to:
 # xtreg d.comb_math_proficiency l(1/6)d.comb_math_proficiency l(0/6)d.csp_a1_dmax20 i.year, fe
