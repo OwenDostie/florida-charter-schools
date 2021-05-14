@@ -5,6 +5,7 @@ output: html_notebook
 
 ## Prepare
 
+
 Init session
 ```{r echo=F, warning=F, message=F}
 rm(list = ls())
@@ -17,7 +18,6 @@ library(plm)  # fixed effects regression
 library(gtools) # combinations 
 library(tictoc) # benchmarking
 library(parallel) # faster computation
-library(caret) # k-fold cross validation
 # library(texreg) # display regression results better
 
 options(scipen=34)
@@ -147,12 +147,71 @@ tictoc::toc()
 
 Delete anything in here:
 ```{r}
-t_func <- function(i) {
-  2*i
-  
+
+```
+
+FE regression, analytic solution to LOOCV
+```{r}
+# init constants
+dmax_set = c(20,40,60,80,100); a_set = c(0.05,0.25,1,5,25); depvar_set = "combined_proficiency"; 
+lags_set = combinations(7,2,c(0:6)); lags_set = paste(lags_set[,1],lags_set[,2],sep=":"); lags_set = "0:6"
+n_folds = 10
+
+# init panel data frame 
+dfp <- pdata.frame(df[charter=="no"],index=c("ncessch","year")) %>% head(200)
+dfp$combined_proficiency <- (dfp$comb_math_proficiency + dfp$comb_ela_proficiency)/2
+
+# init gridsearch and plm function
+g <- expand.grid(dmax = dmax_set,a = a_set, depvar = depvar_set, lags = lags_set, stringsAsFactors=F)
+rr <- function(i) {
+  r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp, model="within")
+  data.frame(g[i,]$dmax,g[i,]$a,g[i,]$lags,r.squared(r),g[i,]$depvar)
 }
 
-tic(); mclapply(1:nrow(g), t_func); toc()
+# run regression on each row of grid
+tic(); regression_results <- mclapply(1:nrow(g), rr) %>% bind_rows; toc()
+
+# rename the results
+regression_results %>% setnames(.,c("max_distance","alpha","lags","rsquared","depvar"))
+```
+
+
+Hat Matrix Testing
+```{r}
+data <- data.table(id=c(1,2,3,4,5,6,7,8,9),t=c(1:9),val=c(2,6,8,4,5,2,6,3,1),pred1=c(3,3,9,4,6,2,4,3,3),pred2=c(9,3,6,6,3,6,9,8,3))
+model <- lm(val ~ pred1 + pred2 + 1,data); summary(model)
+hat_matrix <- lm.influence(model)$hat; hat_matrix
+
+# generate table of stats
+stats <- data.table(y=data$val,yhat=model$fitted.values, res=model$residuals,hat=hat_matrix,TEST=hm %*% data$val); stats
+
+X <- as.matrix(mutate(data[,!c("id","t","val")],intercept=rep(1,nrow(data)))); X
+hm <- X %*% solve(t(X) %*% X) %*% t(X)
+data.frame(yhat = hm %*% data$val,y = data$val,hm[1,],k=hm[1,]*data$val)
+
+# working with plm frame
+model <- plm(val ~ as.numeric(t) + pred1 + pred2,pdata.frame(data,index=c("id","t")),model="between"); summary(model)
+
+# LOOCV ----
+#### LOOCV WITH FORMULA
+loocv=function(X,residuals){
+  hm <- (X %*% solve(t(X) %*% X) %*% t(X)) %>% diag
+  mean((residuals/(1-hm))^2) %>% sqrt
+}
+loocv(X,model$residuals); loocv(X[,1:2],model$residuals)
+# ---- 
+loocv2=function(fit){
+  h=lm.influence(fit)$h
+  mean((residuals(fit)/(1-h))^2) %>% sqrt
+}
+loocv2(model)
+
+
+### LOOCV WITH CARET
+library(caret)
+train(val ~ pred1 + pred2, method = "lm", data = data, trControl = trainControl(method = "LOOCV"))
+# both return 2.1477
+# NOPE!
 ```
 
 Model that will estimate runtime of program
@@ -167,104 +226,135 @@ predict(tm_, newdata=data.frame(nrows = 53468))
 ggplot(tt_) + geom_point(aes(x=nrows,y=time))
 ```
 
-Fixed effects regression in R
 ```{r}
-# init
+dfp <- pdata.frame(df[charter=="no"],index=c("ncessch","year")) %>% head(500)
+r <- plm(comb_math_proficiency ~ year + ncessch, dfp[-21,]); summary(r)
+```
+
+FE regression, fitting it with the correct equation but no cross validation
+```{r}
+# init constants
 dmax_set = c(20,40,60,80,100); a_set = c(0.05,0.25,1,5,25); depvar_set = "combined_proficiency"; 
 lags_set = combinations(7,2,c(0:6)); lags_set = paste(lags_set[,1],lags_set[,2],sep=":"); lags_set = "0:6"
 n_folds = 10
 
-
-# create panel data frame 
-dfp <- pdata.frame(df[charter=="no"],index=c("ncessch","year")) %>% head(500)
+# init panel data frame 
+dfp <- pdata.frame(df[charter=="no"],index=c("ncessch","year")) %>% head(200)
 dfp$combined_proficiency <- (dfp$comb_math_proficiency + dfp$comb_ela_proficiency)/2
 
-
-# init gridsearch and plm functionn
+# init gridsearch and plm function
 g <- expand.grid(dmax = dmax_set,a = a_set, depvar = depvar_set, lags = lags_set, stringsAsFactors=F)
 rr <- function(i) {
   r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp, model="within")
   data.frame(g[i,]$dmax,g[i,]$a,g[i,]$lags,r.squared(r),g[i,]$depvar)
 }
 
-
 # run regression on each row of grid
 tic(); regression_results <- mclapply(1:nrow(g), rr) %>% bind_rows; toc()
+
 # rename the results
 regression_results %>% setnames(.,c("max_distance","alpha","lags","rsquared","depvar"))
-
-# 
-# r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp[-fold[[i]],], model="within")
-# 
-# 
-# # DEBUGG THISS
-# r.squared(r,dfp[fold[[2]],])
-# 
-# # ____  READ SOURCE CODE LUL ____
-# r.squared
-# methods("fitted")
-#   getAnywhere(fitted.plm)
-#     getAnywhere(model.matrix.plm)
-#     getAnywhere(model.matrix)
-#       getAnywhere(model.frame.pdata.frame)
-#     
-# stats:::model.frame
-# methods(model.frame)
-#     
-# getAnywhere(describe)
-# 
-# 
-# is.null(r$model)
-# 
-# fold <- createFolds(1:nrow(dfp),n_folds)
-# for (i in 1:n_folds) {
-#   r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp[-fold[[i]],], model="within")
-#   r.squared(r,)
-#   summary(r)
-# }
-# 
-# predict(r,dfp[fold[[1]],])
-# 
-# myrsquared(r,dfp[fold[[1]],])
 ```
 
+Messing around 
 ```{r}
-# myrsquared <- function (object, model = NULL, type = c("cor", "rss", "ess"), 
-#     dfcor = FALSE) 
-# {
-#     if (is.null(model)) 
-#         model <- describe(object, "model")
-#     effect <- describe(object, "effect")
-#     type <- match.arg(type)
-#     if (type == "cor") {
-#       print(1)
-#         y <- pmodel.response(object, model = model, effect = effect)
-#         print(2)
-#         haty <- fitted(object, model = model, effect = effect)
-#         print(3)
-#         R2 <- cor(y, haty)^2
-#     }
-#     if (type == "rss") {
-#         R2 <- 1 - deviance(object, model = model)/tss(object, 
-#             model = model)
-#     }
-#     if (type == "ess") {
-#         haty <- fitted(object, model = model)
-#         mhaty <- mean(haty)
-#         ess <- as.numeric(crossprod((haty - mhaty)))
-#         R2 <- ess/tss(object, model = model)
-#     }
-#     if (dfcor) 
-#         R2 <- 1 - (1 - R2) * (length(resid(object)) - 1)/df.residual(object)
-#     R2
-# }
-# environment(myrsquared) <- 
-```
+# create folds
+fold <- createFolds(1:nrow(dfp),n_folds)
+for (i in 1:n_folds) {
+  r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp[-fold[[i]],], model="within")
+  r.squared(r,)
+  summary(r)
+}
 
-```{r}
+# run a single regression
+i=1
+r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp[-fold[[i]],], model="within")
+
+
+# DEBUGG THISS
+r.squared(r,dfp[fold[[2]],])
+
+# ____  READ SOURCE CODE LUL ____
+r.squared
+methods("fitted")
+  getAnywhere(fitted.plm)
+    getAnywhere(model.matrix.plm)
+    getAnywhere(model.matrix)
+      getAnywhere(model.frame.pdata.frame)
+
+stats:::model.frame
+methods(model.frame)
+
+getAnywhere(describe)
+
+
+is.null(r$model)
+
+
 predict(r,dfp[fold[[1]],])
+
+myrsquared(r,dfp[fold[[1]],])
 ```
 
+```{r}
+myrsquared <- function (object, model = NULL, type = c("cor", "rss", "ess"),
+    dfcor = FALSE)
+{
+    if (is.null(model))
+        model <- describe(object, "model")
+    effect <- describe(object, "effect")
+    type <- match.arg(type)
+    if (type == "cor") {
+        print(1)
+        y <- pmodel.response(object, model = model, effect = effect)
+        print(2)
+        haty <- fitted(object, model = model, effect = effect)
+        print(3)
+        R2 <- cor(y, haty)^2
+    }
+    if (type == "rss") {
+        R2 <- 1 - deviance(object, model = model)/tss(object,
+            model = model)
+    }
+    if (type == "ess") {
+        haty <- fitted(object, model = model)
+        mhaty <- mean(haty)
+        ess <- as.numeric(crossprod((haty - mhaty)))
+        R2 <- ess/tss(object, model = model)
+    }
+    if (dfcor)
+        R2 <- 1 - (1 - R2) * (length(resid(object)) - 1)/df.residual(object)
+    R2
+}
+environment(myrsquared) <- asNamespace("plm")
+myrsquared(r,dfp[fold[[1]],])
+# trace(r.squared,edit=T)
+# untrace(r.squared)
+getAnywhere(r.squared)
+  getAnywhere(pmodel.response.plm)
+    getAnywhere(model.frame.pdata.frame)
+
+
+model.frame(r,dfp[fold[[1]],])
+trace(pmodel.response)
+  getAnywhere(model.response)
+```
+
+```{r}
+r <- plm(combined_proficiency ~ lag(csp_a1_dmax40,0:6) + year + as.numeric(year)*as.factor(ncessch), data=dfp, model="within"); summary(r)
+
+lm.influence(r)$h
+
+loocv=function(fit){
+  h=lm.influence(fit)$h
+  mean((residuals(fit)/(1-h))^2)
+}
+
+# plm is garbage
+# predict(r,dfp[fold[[1]],])
+```
+
+2nd difference regression
 ```{r}
 # base regression, equivalent to:
 # xtreg d.comb_math_proficiency l(1/6)d.comb_math_proficiency l(0/6)d.csp_a1_dmax20 i.year, fe
