@@ -6,7 +6,6 @@ output: html_notebook
 ## Init Session
 
 Run this to initialize session with an existing csv
-caffeine
 
 ```{r echo=F, warning=F, message=F}
 rm(list = ls())
@@ -196,11 +195,11 @@ data.frame(g[i,]$dmax,g[i,]$a,g[i,]$lags,r.squared(r),g[i,]$depvar)
 FE regression, analytic solution to LOOCV
 ```{r}
 # init constants
-dmax_set = c(20,40,60,80,100)[1]; a_set = c(0.05,0.25,1,5,25)[1]; depvar_set = "combined_proficiency"; 
+dmax_set = c(20,40,60,80,100); a_set = c(0.05,0.25,1,5,25); depvar_set = "combined_proficiency"; 
 lags_set = combinations(7,2,c(0:6)); lags_set = paste(lags_set[,1],lags_set[,2],sep=":"); lags_set = "0:6"
 n_folds = 10
 # maintain a semi-balanced panel by omitting schools with less than 10 observations
-ncessch_keeps = df[,.N,by=ncessch][N>=10,ncessch] %>% head(1280)
+ncessch_keeps = df[,.N,by=ncessch][N>=10,ncessch]
 
 # init panel data frame 
 dfp <- pdata.frame(df[charter=="no" & ncessch %in% ncessch_keeps],index=c("ncessch","year"))
@@ -225,22 +224,15 @@ print(paste0("nrow= ",nrow(dfp)))
 tic(); regression_results <- mclapply(1:nrow(g), rr) %>% bind_rows; toc()
 regression_results %>% setnames(.,c("max_distance","alpha","lags","rsquared","rmse","loocv","depvar"))
 
+# write results to csv
+fwrite(regression_results,"regression_results.csv")
 
 ### LOOKING AT RESULTS
 sdfsdfsdfsdfsdfsdfsdf
 
 regression_results
-regression %>% summary
-regression2 %>% summary
-regression %>% str
-regression$residuals
-# calculate RMSE
-sqrt(sum(regression$residuals^2)/(140-44))
-sqrt(sum(regression2$residuals^2)/(140-44))
-# show results
-#d <- r$model %>% model.matrix %>% dimnames(); d[[2]]
-# hatmat
-# regression
+regression_results %>% arrange(loocv)
+
 ```
 grid search of 25 values on a dataset of the first 15 ncessch keeps the runtime is:
 
@@ -283,7 +275,8 @@ train(val ~ pred1 + pred2, method = "lm", data = data, trControl = trainControl(
 # NOPE!
 ```
 
-Model that will estimate runtime of program
+Model that will estimate runtime of program 
+For a single regression. 
 ```{r}
 tt_ = data.table(
   nrows=c(96,196,392,712,1331,2821,5822,11006,21496),
