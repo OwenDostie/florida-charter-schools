@@ -5,7 +5,7 @@ Over the past two years I have been responsible for developing the technology to
 
 ## General Overview
 - Extract data from multiple multiple public sources, and make sure the files stay current. 
-- Combine the data, perform general cleaning steps, and homogenize key features that will be used later on. 
+- Combine the data, perform general cleaning steps, and homogenize key features that will be used later on. Exclude instutions that are not relevant to the study, or that do not provide enough data. 
 - Provide accurate location data for the schools. This is tricky because the data from public sources is not reliable. Since schools can change location several times or close, looking up their current location is not a valid approach. I used a hierarchical clustering model and fuzzy string matching, and cross-referenced it with Google Maps when possible. 
 - Create a representative measure of charter competition. There are many ways to approach this, and most comparable literature uses simplified metrics that are less accurate. The linear algebra approach we settled on takes the product of distance and enrollment of all surrounding schools, fits a curving function with the best hyperparameters, and then sums these values. 
 - Produce time-series models to explore the effects of charter school presence. This required a custom implementation of leave-one-out-cross-validation to improve runtime.
@@ -18,20 +18,10 @@ Over the past two years I have been responsible for developing the technology to
 - Computational linear algebra
 - Time-series regression
 
-# Code
+# Code & Process
 
 ## Notes
 [Data Dictionary](https://docs.google.com/spreadsheets/d/1w-w7T3FAB0RLbvLk99KsqqPeYc_2AcSK3gtDrOsGLI0/edit#gid=188439690)
-
-
-
-## Manual Data Editing
-
-**src/school_types_include.csv** </br>
-This is a subset of the schools that were not easily classifiable as charter/non-charter and as regular/non-regular in the data. For each school in this list discretion was used to determine if a school is to be included in the study. For some schools only certain years are excluded. The aim is to only include charter schools and traditional public schools in years that they were operational. 
-
-**src/manually_corrected_locations.csv**</br>
-
 
 ## Data Sources
 All sources will eventually contain data 1999 through 2018, some are currently a year or two behind 2018
@@ -65,3 +55,10 @@ contains general information about:
 - Total enrollment
 - Highest and lowest grade
 - Teachers & pupil teacher ratio
+
+## Manual Data Editing
+
+**src/school_types_include.csv** </br>
+This is a subset of the schools that were not easily classifiable as charter/non-charter and as regular/non-regular in the data. For each school in this list discretion was used to determine if a school is to be included in the study. For some schools only certain years are excluded. The aim is to only include charter schools and traditional public schools in years that they were operational. 
+
+**src/manually_corrected_locations.csv**</br>
