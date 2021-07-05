@@ -18,14 +18,14 @@ Over the past two years I have been responsible for developing the technology to
 - Computational linear algebra
 - Time-series regression
 
-# Code Overview
+# Code
 
-### Notes
+## Notes
 [Data Dictionary](https://docs.google.com/spreadsheets/d/1w-w7T3FAB0RLbvLk99KsqqPeYc_2AcSK3gtDrOsGLI0/edit#gid=188439690)
 
 
 
-### Manual Data Editing
+## Manual Data Editing
 
 **src/school_types_include.csv** </br>
 This is a subset of the schools that were not easily classifiable as charter/non-charter and as regular/non-regular in the data. For each school in this list discretion was used to determine if a school is to be included in the study. For some schools only certain years are excluded. The aim is to only include charter schools and traditional public schools in years that they were operational. 
@@ -33,7 +33,7 @@ This is a subset of the schools that were not easily classifiable as charter/non
 **src/manually_corrected_locations.csv**</br>
 
 
-### Data Sources
+## Data Sources
 All sources will eventually contain data 1999 through 2018, some are currently a year or two behind 2018
 
 **Urban Institute Dataset** (https://educationdata.urban.org/data-explorer/schools/) downloaded 06/04/20 
