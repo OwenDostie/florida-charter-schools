@@ -1,3 +1,25 @@
+# My Contribution to the Research
+Over the past two years I have been responsible for developing the technology to analyze the effects of charter competition on neighboring traditional public schools (TPS). The work was under the supervision of Dr. Jim Dewey, but largely independent. The aim is to inform research questions that are not fully addressed in the literature:
+- When a new charter school emerges in Florida does it have time-series effects on neighboring TPS?
+- What are the nature of these effects, if any?
+
+## General Overview
+- Extract data from multiple multiple public sources, and make sure the files stay current. 
+- Combine the data, perform general cleaning steps, and homogenize key features that will be used later on. 
+- Provide accurate location data for the schools. This is tricky because the data from public sources is not reliable. Since schools can change location several times or close, looking up their current location is not a valid approach. I used a hierarchical clustering model and fuzzy string matching, and cross-referenced it with Google Maps when possible. 
+- Create a representative measure of charter competition. There are many ways to approach this, and most comparable literature uses simplified metrics that are less accurate. The linear algebra approach we settled on takes the product of distance and enrollment of all surrounding schools, fits a curving function with the best hyperparameters, and then sums these values. 
+- Produce time-series models to explore the effects of charter school presence. This required a custom implementation of leave-one-out-cross-validation to improve runtime.
+
+## Technologies Used
+- R (tidyverse, data.table, plm, stringdist, ggplot)
+- Stata
+- Google Cloud Platform API
+- Unsupervised machine learning
+- Computational linear algebra
+- Time-series regression
+
+# Code Overview
+
 ### Notes
 [Data Dictionary](https://docs.google.com/spreadsheets/d/1w-w7T3FAB0RLbvLk99KsqqPeYc_2AcSK3gtDrOsGLI0/edit#gid=188439690)
 
