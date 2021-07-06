@@ -1,5 +1,5 @@
 # My Contribution to the Research
-Over the past two years I have been responsible for developing the technology to analyze the effects of charter competition on neighboring traditional public schools (TPS). The work was under the supervision of Dr. Jim Dewey, but largely independent. My aim is to inform research questions that are not fully addressed in the literature:
+Over the past two years I have been responsible for developing the technology to analyze the effects of charter competition on neighboring traditional public schools (TPS). The work was under the supervision of Dr. Jim Dewey, but largely independent. My purpose is to inform research questions that are not fully addressed in the literature:
 - When a new charter school emerges in Florida does it have time-series effects on neighboring TPS?
 - What are the nature of these effects, if any?
 
