@@ -17,6 +17,7 @@ Over the past two years I have been responsible for developing the technology to
 - Unsupervised machine learning
 - Computational linear algebra
 - Time-series regression
+- Fuzzy string matching
 
 # Additional Information
 
