@@ -71,27 +71,29 @@ tictoc::toc()
 
 Generate charter student presence measure
 ```{r}
-# 244.114/196.847 seconds with sparse matrix
+# 244.114/196.847 seconds with sparse matrix 
 # 375.247 seconds without sparse matrix
 
 tictoc::tic()
-
+dmax_set = c(4, 8, 12, 16, 24); a_set = c(0.2, 0.3, 4, 6);
 # INIT HYPPERPARAMETERS ----
 # max distance where that schools are accounted for, after this their weight is 0
-dmax_set = c(20,40,60,80,100)
+#dmax_set = c(20,40,60,80,100)
 
 # a corresponds to the curve shape. 1 is straight line from (0,1) to (d,0), a > 1 is concave, a < 1 is convex. 
-a_set = c(0.05,0.25,1,5,25)
+#a_set = c(0.05,0.25,1,5,25)
 
 
 # INIT OTHER ----
 
 
     # load add CSP to a previous previous dataset
-    df <- fread("sch_include_02_18_21.csv", integer64="numeric")
+    #df <- fread("sch_include_02_18_21.csv", integer64="numeric")
     # OR 
     # create new measure of CSP in the current  data.table
     #df[,df %>% names %>% grep("csp",.) := NULL]
+    # OR 
+    # add additional CSP to current data table but do not remove anything
 
 
 dm <- fread("src/distance_matrix.csv",integer64 = "double") %>% as.matrix()
@@ -195,9 +197,8 @@ data.frame(g[i,]$dmax,g[i,]$a,g[i,]$lags,r.squared(r),g[i,]$depvar)
 FE regression, analytic solution to LOOCV
 ```{r}
 # init constants
-dmax_set = c(20,40,60,80,100); a_set = c(0.05,0.25,1,5,25); depvar_set = "combined_proficiency"; 
+dmax_set = c(4, 8, 12, 16, 24); a_set = c(0.2, 0.3, 4, 6); depvar_set = "combined_proficiency"; 
 lags_set = combinations(7,2,c(0:6)); lags_set = paste(lags_set[,1],lags_set[,2],sep=":"); lags_set = "0:6"
-n_folds = 10
 # maintain a semi-balanced panel by omitting schools with less than 10 observations
 ncessch_keeps = df[,.N,by=ncessch][N>=10,ncessch]
 
@@ -205,36 +206,96 @@ ncessch_keeps = df[,.N,by=ncessch][N>=10,ncessch]
 dfp <- pdata.frame(df[charter=="no" & ncessch %in% ncessch_keeps],index=c("ncessch","year"))
 dfp$combined_proficiency <- (dfp$comb_math_proficiency + dfp$comb_ela_proficiency)/2
 
-# init gridsearch and plm function
+# init gridsearch and panel linear model function
 g <- expand.grid(dmax = dmax_set,a = a_set, depvar = depvar_set, lags = lags_set, stringsAsFactors=F)
-regressions = list()
+reglist = list()
 rr <- function(i) {
+  gc()
+  tic("inner")
   r <- plm(as.formula(paste(g[i,]$depvar," ~ year + as.numeric(year) * as.factor(ncessch) + lag(csp_a",g[i,]$a,"_dmax",g[i,]$dmax,",",g[i,]$lags,")",sep="")), data=dfp, model="within")
+  reglist[[i]] <<- r
   X <- data.table(model.matrix(r)) %>% select(names(r$coefficients)) %>% as.matrix
-  #print(model.matrix(),d[[2]])
   hm <- X %*% solve(t(X) %*% X) %*% t(X)
-  loocv <- mean((r$residuals/(1-hm))^2) %>% sqrt
+  hmSize = object.size(hm) %>% as.numeric
+  # transform hm to avoid allocating more memory
+  hm = 1-hm
+  hm = r$residuals/(hm); 
+  loocv <- mean(hm^2) %>% sqrt
+  rm(hm); gc()
   rmse <- mean(r$residual^2) %>% sqrt
+  
+  # output to line-by-line csv in case of crash
+  t <- toc()
+  fwrite(data.frame(g[i,]$dmax,g[i,]$a,g[i,]$lags,r.squared(r),rmse,loocv,g[i,]$depvar,unname(t$toc - t$tic),nrow(dfp),hmSize), "regression_results_linebyline.csv", append = T)
+  rm(t,hmSize)
+  
   # create row of df
-  data.frame(g[i,]$dmax,g[i,]$a,g[i,]$lags,r.squared(r),rmse,loocv,g[i,]$depvar)
+  return(data.frame(g[i,]$dmax,g[i,]$a,g[i,]$lags,r.squared(r),rmse,loocv,g[i,]$depvar))
 }
+
+
+# create regression results readme
+#fwrite(list("max_distance","alpha","lags","rsquared","rmse","loocv","depvar","elapsed_time","nrow","hm_size"),"regression_results_linebyline.csv")
 
 # run regression on each row of grid
 print(paste0("nrow= ",nrow(dfp)))
-tic(); regression_results <- mclapply(1:nrow(g), rr) %>% bind_rows; toc()
+options(mc.cores=12)
+nlines=19 #nlines = fread("regression_results_linebyline.csv", integer64 = "numeric"); nlines = nrow(nlines)
+tic("outer"); regression_results <- lapply((1+nlines):nrow(g), rr) %>% bind_rows; toc()   #tic(); regression_results <- mclapply(1:nrow(g), rr) %>% bind_rows; toc()
 regression_results %>% setnames(.,c("max_distance","alpha","lags","rsquared","rmse","loocv","depvar"))
 
 # write results to csv
-fwrite(regression_results,"regression_results.csv")
+# fwrite(regression_results,"regression_results.csv")
+
+# save regressions to file
+# save.image(file="mysession.RData")
+
 
 ### LOOKING AT RESULTS
 sdfsdfsdfsdfsdfsdfsdf
+plot(regression_results$rmse,regression_results$loocv)
 
-regression_results
-regression_results %>% arrange(loocv)
-
+r <- reglist[[1]]
+gc()
+X <- data.table(model.matrix(r)) %>% select(names(r$coefficients)) %>% as.matrix
+X <- data.table(model.matrix(r))[,list(names(r$coefficients))]
+X <- data.table(model.matrix(r))
+#print(model.matrix(),d[[2]])
+hm <- X %*% solve(t(X) %*% X) %*% t(X)
+loocv <- mean((r$residuals/(1-hm))^2) %>% sqrt
+rmse <- mean(r$residual^2) %>% sqrt
+# create row of df
+data.frame(g[i,]$dmax,g[i,]$a,g[i,]$lags,r.squared(r),rmse,loocv,g[i,]$depvar)
 ```
+```{r}
+r <- reglist[[20]]
+summary(r)
+mean(r$residual^2) %>% sqrt
+```
+
+9.
+h(simpleError(msg, call))
+8.
+.handleSimpleError(function (cond) .Internal(C_tryCatchHelper(addr, 1L, cond)), "cannot allocate vector of size 9.2 Gb", base::quote(NULL))
+7.
+mean((r$residuals/(1 - hm))^2)
+6.
+mean((r$residuals/(1 - hm))^2) %>% sqrt
+5.
+FUN(X[[i]], ...)
+4.
+lapply(1:nrow(g), rr)
+3.
+list2(...)
+2.
+bind_rows(.)
+1.
+lapply(1:nrow(g), rr) %>% bind_rows
+
 grid search of 25 values on a dataset of the first 15 ncessch keeps the runtime is:
+```{r}
+mean()
+```
 
 
 Hat Matrix Testing
@@ -284,6 +345,7 @@ tt_ = data.table(
 #tt_ = data.table(nrows = c(1000,2000,3600,8000,12000,5341,14000,16000,20000,53468),time = c(0.216,0.423,1.366,5.899,16.415,2.436,23.395,33.836,60.7,868.486))
 tm_ <- lm(time ~ nrows + I(nrows^2),tt_)
 predict(tm_, newdata=data.frame(nrows = 53468))
+predict(tm_, newdata=data.frame(nrows = 6991))
     # with 20,000 rows the model predicts 55 seconds
     # with 53,468 observations the model predicts 533.2522 seconds. I predict it will take 600 seconds. It actually took 868
     # 868 * 525 / 3  is the total runtime with parallelization, but no crossfold validation. 41 hours, could be much longer. 20 hours with 10fold, using all 6 lags. LOOCV seems out of the question.  
