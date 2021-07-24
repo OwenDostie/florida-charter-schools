@@ -1,0 +1,39 @@
+---
+title: "Florida Schools Data Visualization"
+output: html_notebook
+---
+
+```{r}
+# init session
+library(tidyverse); library(data.table);
+library(ggplot2); library(gganimate); library(ggthemes); library(ggmap); library(gifski)
+df <- fread("sch_include_03_01_21.csv", integer64="numeric")
+```
+ 
+```{r fig.width=8,fig.height=6}
+# get backdrop from stamen maps
+florida_background <- get_stamenmap( bbox = c(left = -88, bottom = 24, right = -79.9, top = 31.2), zoom = 6, color='color', maptype = "terrain-background")
+
+# create static plot
+plot <- ggmap(florida_background, darken=c(0.5, 'white')) + 
+  geom_point(data=df[distinct_charter == T], mapping=aes(x=gm_lon, y=gm_lat, size=k12_enrollment), alpha=0.2, color="red") +
+  ggtitle("Emergence Of Charter Schools In FLorida") +
+  labs(title = "Emergence Of Charter Schools In Florida", x="Longitude", y="Latitude", size="Enrollment")
+plot
+```
+
+
+```{r}
+# create animated plot
+plot.animate <- plot +
+  transition_time(year) +
+  labs(subtitle = "Year: {frame_time}", 
+       size="Enrollment:")
+
+# Total Enrollment: {df$k12_enrollment[df$year==frame_time & df$distinct_charter == T] %>% sum() %>% format(big.mark=',')}
+
+animate(plot.animate, height=600, width=800, nframes=24, fps=8, end_pause=4) %>% anim_save(animation=., filename = "emergenceOfCharterSchools.gif")
+```
+
+ 
+ 
