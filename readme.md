@@ -27,7 +27,7 @@ The measure of charter presence/competition was selected very carefully. It addr
 The resulting measure reflects the data more accurately by using a curve function on distance instead of a hard cutoff, and by considering gradewise enrollment. The image below should provide a perspective on what the computer sees when looking at a particular TPS (Oscar J. Pope) in a given year (2018). 
 
 <p align="center" width="100%">
-    <img src="img/competitionMeasureExample.jpg"> 
+    <img width="70%" src="img/competitionMeasureExample.jpg"> 
 </p>
 
 Right across the street from Oscar J. Pope is South McKeel Academy, a high-enrollment charter school. Both schools educate at similar grade levels (K-5 v.s. K-7). Note that McKeel is weighted higher than other high-enrollment schools due to its proximity. In general, schools further away receive less weight, as do schools with non-similar grade levels. There is some elegant matrix math that makes this computation very efficient, since the final dataset contains both distance and gradewise enrollment.
