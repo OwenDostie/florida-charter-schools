@@ -1,5 +1,7 @@
-# Florida Charter Schools
-In the last 20 years there has been tremendous adoption of charter schools in Florida. The percent of students in charter schools has grown by a factor of 14 (from 0.75% in 1999 to 10.8% in 2018). Support for charter education in Florida is political and divisive. Effects of charter schools on the performance of nearby traditional public schools (TPS) is a point of contention that has not been thoroughly studied. One of the objectives of this research is to address the existance and nature of these effects. 
+# Abstract
+In the past ~20 years there has been tremendous adoption of charter schools in Florida. The percent of students in charter schools has grown by a factor of 14 (from 0.75% in 1999 to 10.8% in 2018). Support for charter education in Florida is political and divisive. Effects of charter presence on the performance of nearby traditional public schools (TPS) is a point of contention that has not been thoroughly studied in Florida, and the related literature is not always informative. One of the core objectives of this research is to address the existance and nature of these effects. 
+
+------
 
 <p align="center" width="100%">
     <img src="img/emergenceOfCharterSchools.gif"> 
