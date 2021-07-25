@@ -21,7 +21,7 @@ Over the past two and a half years I have been responsible for developing the te
 
 ## Competition Measure Used
 The measure of charter presence/competition was selected very carefully. It addresses features of the data that are mostly neglected in the literature. Generally, studies will take a fixed radius surrounding each TPS (e.g. 5 miles) and calculate charter_enrollment/total_enrollment. We have embedded two additional assumptions in our metric: 
-1. Grade level. Charter students in high-school do not compete with surrounding elementary schools.
+1. Grade level. Charter high-schools do not compete with surrounding elementary schools.
 2. Proximity. A charter school across the street from a TPS provides more competition than a charter school 4 miles away (with all else constant). 
 
 The resulting measure reflects the data more accurately by using a curve function on distance instead of a hard cutoff, and by considering gradewise enrollment. The image below should provide a perspective on what the computer sees when looking at a particular TPS (Oscar J. Pope) in a given year (2018). 
