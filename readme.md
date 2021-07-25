@@ -21,6 +21,7 @@ Over the past two and a half years I have been responsible for developing the te
 
 <p align="center" width="100%">
     <img src="img/curveFunctionExample.gif"> 
+    <br>
     <i>Curve function used to produce a continuous measure of charter presence/competition</i>
 </p>
 
