@@ -1,5 +1,10 @@
-# My Contribution to the Research
-Over the past two and a half years I have been responsible for developing the technology to analyze the effects of charter competition on neighboring traditional public schools (TPS). The work was under the supervision of Dr. Jim Dewey, but largely independent. My purpose is to inform research questions that are not fully addressed in the literature:
+# Florida Charter Schools
+In the last 20 years there has been tremendous adoption of charter schools in Florida. The percent of students in charter schools has grown by a factor of 14 (from 0.75% in 1999 to 10.8% in 2018). Support for charter education in Florida is political and divisive. Effects of charter schools on the performance of nearby traditional public schools (TPS) is a point of contention that has not been thoroughly studied. One of the objectives of this research is to address the existance and nature of these effects. 
+
+![Image of Yaktocat](img/emergenceOfCharterSchools.gif)
+
+## My Contribution to the Research
+Over the past two and a half years I have been responsible for developing the technology to analyze the effects of charter competition on neighboring TPS. The work was under the supervision of Dr. Jim Dewey, but largely independent. My purpose is to inform research questions that are not fully addressed in the literature:
 - When a new charter school opens, closes, grows, or shrinks in Florida does it have time-series effects on neighboring TPS?
 - What are the nature of these effects, if any?
 
@@ -14,18 +19,16 @@ Over the past two and a half years I have been responsible for developing the te
 - R (tidyverse, data.table, plm, stringdist, ggplot)
 - Stata
 - Google Cloud Platform API
-- Unsupervised machine learning
-- Computational linear algebra
-- Time-series regression
-- Fuzzy string matching
-
-# Additional Information
-
-## Notes
-[Data Dictionary](https://docs.google.com/spreadsheets/d/1w-w7T3FAB0RLbvLk99KsqqPeYc_2AcSK3gtDrOsGLI0/edit#gid=188439690)
+- Unsupervised machine learning (hierarchical clustering)
+- Computational linear algebra (sparse matrices, distributed computing, analytic LOOCV)
+- Time-series regression 
+- Text processing & fuzzy string matching
 
 ## Data Sources
-All sources will eventually contain data 1999 through 2018, some are currently a year or two behind 2018
+
+[Data Dictionary](https://docs.google.com/spreadsheets/d/1w-w7T3FAB0RLbvLk99KsqqPeYc_2AcSK3gtDrOsGLI0/edit#gid=188439690)
+
+All sources will eventually contain data 1999 through 2018, some are currently a year or two behind 2018. 2019 omitted due to pandemic. 
 
 **Urban Institute Dataset** (https://educationdata.urban.org/data-explorer/schools/) downloaded 06/04/20 
 Most information comes from the common core of data [partial data dictionary](https://nces.ed.gov/ccd/psadd.asp)
@@ -57,7 +60,7 @@ contains general information about:
 - Highest and lowest grade
 - Teachers & pupil teacher ratio
 
-## Manual Data Editing
+## Manual Data Cleaning
 
 **src/school_types_include.csv** </br>
 This is a subset of the schools that were not easily classifiable as charter/non-charter and as regular/non-regular in the data. For each school in this list discretion was used to determine if a school is to be included in the study. For some schools only certain years are excluded. The aim is to only include charter schools and traditional public schools in years that they were operational. 
