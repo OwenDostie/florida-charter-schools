@@ -19,8 +19,27 @@ Over the past two and a half years I have been responsible for developing the te
 - Create a representative measure of charter competition. There are many ways to approach this, and most comparable literature uses simplified metrics that are less accurate. The linear algebra approach we settled on takes the product of distance and enrollment of all surrounding schools, fits a curving function with the best hyperparameters, and then sums these values. 
 - Produce time-series models to explore the effects of charter school presence. This required a custom implementation of leave-one-out-cross-validation to improve runtime.
 
+## Competition Measure Used
+The measure of charter presence/competition was selected very carefully. It addresses features of the data that are mostly neglected in the literature. Generally, studies will take a fixed radius surrounding each TPS (e.g. 5 miles) and calculate charter_enrollment/total_enrollment. We have embedded two additional assumptions in our metric: 
+1. Grade level. Charter students in high-school do not compete with surrounding elementary schools.
+2. Proximity. A charter school across the street from a TPS provides more competition than a charter school 4 miles away (with all else constant). 
+
+The resulting measure reflects the data more accurately by using a curve function on distance instead of a hard cutoff, and by considering gradewise enrollment. The image below should provide a perspective on what the computer sees when looking at a particular TPS (Oscar J. Pope) in a given year (2018). 
+
 <p align="center" width="100%">
-    <img src="img/curveFunctionExample.gif"> 
+    <img src="img/competitionMeasureExample.jpg"> 
+</p>
+
+Right across the street from Oscar J. Pope is South McKeel Academy, a high-enrollment charter school. Both schools educate at similar grade levels (K-5 v.s. K-7). Note that McKeel is weighted higher than other high-enrollment schools due to its proximity. In general, schools further away receive less weight, as do schools with non-similar grade levels. There is some elegant matrix math that makes this computation very efficient, since the final dataset contains both distance and gradewise enrollment.
+
+The hyperparameters of this plot have been selected as (max_distance=4, alpha=0.3), which means the following:
+- At a distance greater than 4 miles a school's weight is 0. 
+- Schools closer to the max distance (4 miles in this case) have a weight close to 0, and schools closer to Oscar J. Pope have a weight close to 1. In other words, the curve function is concave, which corresponds to alpha < 1. 
+
+When alpha is greater than 1 the curve is convex, meaning that almost all schools will have a weight close to 1. Several pairs of the best hyperparameters were selected with a grid search. Hopefully the image below provides a bit of an intuition for the potential relationships between distance (x-axis) and weight (y-axis).
+
+<p align="center" width="100%">
+    <img src="img/gridSearchExample.gif"> 
     <br>
     <i>Curve function used to produce a continuous measure of charter presence/competition</i>
 </p>
