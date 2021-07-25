@@ -7,9 +7,13 @@ output: html_notebook
 # init session
 library(tidyverse); library(data.table);
 library(ggplot2); library(gganimate); library(ggthemes); library(ggmap); library(gifski)
+options(scipen=20)
 df <- fread("sch_include_03_01_21.csv", integer64="numeric")
 ```
  
+## Emergence of charter schools
+
+Create a static plot of charter school emergence in Florida.
 ```{r fig.width=8,fig.height=6}
 # get backdrop from stamen maps
 florida_background <- get_stamenmap( bbox = c(left = -88, bottom = 24, right = -79.9, top = 31.2), zoom = 6, color='color', maptype = "terrain-background")
@@ -22,9 +26,9 @@ plot <- ggmap(florida_background, darken=c(0.5, 'white')) +
 plot
 ```
 
-
+Create an animated plot from the previous static plot.
 ```{r}
-# create animated plot
+# create animated plot w/ live labs
 plot.animate <- plot +
   transition_time(year) +
   labs(subtitle = "Year: {frame_time}", 
@@ -32,8 +36,99 @@ plot.animate <- plot +
 
 # Total Enrollment: {df$k12_enrollment[df$year==frame_time & df$distinct_charter == T] %>% sum() %>% format(big.mark=',')}
 
-animate(plot.animate, height=600, width=800, nframes=24, fps=8, end_pause=4) %>% anim_save(animation=., filename = "emergenceOfCharterSchools.gif")
+# produce animation
+animate(plot.animate, height=600, width=800, nframes=24, fps=8, end_pause=4) #%>% anim_save(animation=., filename = "img/emergenceOfCharterSchools.gif")
 ```
 
- 
- 
+## Measure of competition/presence
+
+Initialize best-fit competition measure.
+```{r}
+# running more than once will cause extra columns in df, so don't do that
+
+# faster computation with sparse matrices
+library(Matrix)
+
+# read distance matrix
+dm <- fread("src/distance_matrix.csv", integer64="numeric") %>% as.matrix
+
+# use best hyperparameter fit
+dmax_set = c(4); a_set = c(0.3);
+
+# all grades to iterate through and average
+grades <- paste0(c("k",paste0("grade",1:12)),"_enr")
+
+y_enr = list(); y_cenr = list()
+for (y in 1999:2018) {
+    # create a list of enrollments by year. row is location ID, column is grade
+    y_enr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y, lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
+    # & create a list of charter enrollments by year. row is location ID, column is grade
+    y_cenr[[y]] <- (merge(data.table(location_id=1:nrow(dm)),df[year == y & charter=="yes", lapply(.SD,function(x) sum(x,na.rm=T)), by=location_id, .SDcols = grades], by="location_id", all.x=T) %>% select(2:14) %>% replace(.,is.na(.),0) %>% as.matrix)
+}
+
+
+# LOOP ----
+# iterate through all values of max distance
+for (dmax in dmax_set) { 
+  # where distance >= distance max, set the weight to 0
+  dmf <- (dm/dmax); dmf[dmf > 1] <- 1
+  
+  # iterate through all curve-shaping values
+  for (a in a_set) {
+    paste0("\na=",a,"; dmax=",dmax) %>% cat
+    # apply the curving function to the distance matrix
+    dmf <- Matrix(1-(dmf^a),sparse=T)
+        
+    # iterate through all years
+    for (y in 1999:2018) {
+      
+      # STUDENT PRESENCE proximate to location I, weighted by distance curving function
+      sp <- data.table(as.matrix(dmf %*% y_enr[[y]])); setnames(sp,paste0('sp_',grades))
+      # CHARTER STUDENT PRESENCE proximate to location I, weighted by distance curving function
+      csp <- data.table(as.matrix(dmf %*% y_cenr[[y]])); setnames(csp,paste0('csp_',grades))
+      # add location_id and year columns so that a join with df is possible
+      # if this throws an error it means your dm and 
+      sp[,`:=`(location_id = 1:nrow(dm), year=y)]; csp[,`:=`(location_id = 1:nrow(dm), year=y)]
+      
+      # data.table of location ids and 
+      if (y==1999) t_lids <- merge(sp,csp,on=.(location_id,year))
+      else t_lids <- rbind(t_lids, merge(sp,csp,on=.(location_id,year)))
+    }
+  
+    # generate a column representing charter student presence given dmax and a
+    t_m <- merge(select(df,location_id,year,ncessch,k12_enrollment,grades),t_lids,by=c("location_id","year"))
+    t_m[[paste0("csp","_a",a,"_dmax",dmax)]] <- (rowSums((as.matrix(select(t_m, paste0("csp_",grades))) / as.matrix(select(t_m, paste0("sp_",grades,""))))  *  as.matrix(select(t_m,grades))) / as.matrix(t_m$k12_enrollment))
+    df <- merge(df,select(t_m,year,ncessch,paste0("csp","_a",a,"_dmax",dmax)),by=c("ncessch","year"))
+  }
+}
+```
+
+Let's focus on a specific school to get an idea of how the competition/presence measures are calculated. The school we're focusing on is a TPS in Lakeland called Oscar J. Pope Elementary. ncessch=120159001783, location_id=3698, 
+```{r}
+# get backdrop from stamen maps
+florida_background <- get_stamenmap( bbox = c(left = -81.97, bottom = 27.94, right = -81.85, top = 28.08), zoom = 12, color='color', maptype = "terrain")
+
+# find all the locations within 8 miles of the one we're looking at
+proximateSchools = which(dm[3698,] < 5) %>% unname
+
+# create static plot
+plot <- ggmap(florida_background, darken=c(0.5, 'white')) + 
+  geom_point(data=df[year==2018 & location_id%in%proximateSchools], mapping=aes(x=gm_lon, y=gm_lat, size=k12_enrollment, color=distinct_charter), alpha=0.8) +
+  geom_point(data=df[year==2018 & location_id==3698], mapping=aes(x=gm_lon, y=gm_lat), color='red', size=2) +
+  geom_text(aes(label=school_name),hjust=0, vjust=0) +
+  scale_size(range = c(1, 4)) + 
+  ggtitle("Emergence Of Charter Schools In FLorida") +
+  labs(title = "Emergence Of Charter Schools In Florida", x="Longitude", y="Latitude", size="Enrollment")
+
+plot
+```
+
+
+```{r}
+df[year==2018 & distinct_charter == F] %>% arrange(desc(csp_a0.3_dmax4)) %>% head(50) %>% view
+df[ncessch==120159001783]
+# 
+df[year==2018 & location_id%in%proximateSchools]
+
+```
+
