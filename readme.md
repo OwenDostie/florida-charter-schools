@@ -1,5 +1,5 @@
 # Abstract
-In the past ~20 years there has been tremendous adoption of charter schools in Florida. The percent of students in charter schools has grown by a factor of 14 (from 0.75% in 1999 to 10.8% in 2018). Support for charter education in Florida is political and divisive. Effects of charter presence on the performance of nearby traditional public schools (TPS) is a point of contention that has not been thoroughly studied in Florida, and the related literature is not always informative. One of the core objectives of this research is to address the existance and nature of these effects. 
+In the past ~20 years there has been tremendous adoption of charter schools in Florida. The percent of students in charter schools has grown by a factor of 14 (from 0.75% in 1999 to 10.8% in 2018). Support for charter education in Florida is political and divisive. Effects of charter presence on the performance of nearby traditional public schools (TPS) is a point of contention that has not been thoroughly studied in Florida, and the related literature is not always informative. One of the core objectives of this research is to address the existence and nature of these effects. 
 
 ------
 
@@ -14,7 +14,7 @@ Over the past two and a half years I have been responsible for developing the te
 
 ## General Overview
 - Extract data from multiple multiple public sources, and make sure the files stay current. 
-- Combine the data, perform general cleaning steps, and homogenize key features that will be used later on. Exclude instutions that are not relevant to the study, or that do not provide enough data. 
+- Combine the data, perform general cleaning steps, and homogenize key features that will be used later on. Exclude institutions that are not relevant to the study, or that do not provide enough data. 
 - Provide accurate location data for the schools. This is tricky because the data from public sources is not reliable. Since schools can change location several times or close, looking up their current location is not a valid approach. I used a hierarchical clustering model and fuzzy string matching, and cross-referenced it with Google Maps when possible. 
 - Create a representative measure of charter competition. There are many ways to approach this, and most comparable literature uses simplified metrics that are less accurate. The linear algebra approach we settled on takes the product of distance and enrollment of all surrounding schools, fits a curving function with the best hyperparameters, and then sums these values. 
 - Produce time-series models to explore the effects of charter school presence. This required a custom implementation of leave-one-out-cross-validation to improve runtime.
