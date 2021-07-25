@@ -132,3 +132,10 @@ df[year==2018 & location_id%in%proximateSchools]
 
 ```
 
+```{r}
+# 2018:   charter students: 292508  tps students: 2411983
+# 1999:   charter students: 17034  tps students: 2245783   
+df[year==1999 & distinct_charter == T]$k12_enrollment %>% sum
+```
+
+
