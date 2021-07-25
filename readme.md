@@ -17,7 +17,10 @@ Over the past two and a half years I have been responsible for developing the te
 - Create a representative measure of charter competition. There are many ways to approach this, and most comparable literature uses simplified metrics that are less accurate. The linear algebra approach we settled on takes the product of distance and enrollment of all surrounding schools, fits a curving function with the best hyperparameters, and then sums these values. 
 - Produce time-series models to explore the effects of charter school presence. This required a custom implementation of leave-one-out-cross-validation to improve runtime.
 
-![Curve Function Example](img/curveFunctionExample.gif)
+<p align="center" width="100%">
+    <img src="img/curveFunctionExample.gif"> 
+</p>
+
 ## Technologies Used
 - R (tidyverse, data.table, plm, stringdist, ggplot)
 - Stata
