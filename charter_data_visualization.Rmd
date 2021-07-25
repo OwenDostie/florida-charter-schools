@@ -6,7 +6,7 @@ output: html_notebook
 ```{r}
 # init session
 library(tidyverse); library(data.table);
-library(ggplot2); library(gganimate); library(ggthemes); library(ggmap); library(gifski)
+library(ggplot2); library(gganimate); library(ggthemes); library(ggmap); library(ggrepel); library(gifski)
 options(scipen=20)
 df <- fread("sch_include_03_01_21.csv", integer64="numeric")
 ```
@@ -34,12 +34,12 @@ plot.animate <- plot +
   labs(subtitle = "Year: {frame_time}", 
        size="Enrollment:") +
   theme(plot.title=element_text(size=24), plot.subtitle=element_text(size=18), legend.title=element_text(size=18), 
-        legend.text=element_text(size=14), axis.text=element_text(size=14))
+        legend.text=element_text(size=14))
 
 # Total Enrollment: {df$k12_enrollment[df$year==frame_time & df$distinct_charter == T] %>% sum() %>% format(big.mark=',')}
 
 # produce animation
-animate(plot.animate, height=600, width=700, nframes=24, fps=8, end_pause=4) %>% anim_save(animation=., filename = "img/emergenceOfCharterSchools.gif")
+animate(plot.animate, height=600, width=700, nframes=24, fps=8, end_pause=4) #%>% anim_save(animation=., filename = "img/emergenceOfCharterSchools.gif")
 ```
 
 ## Measure of competition/presence
@@ -106,38 +106,36 @@ for (dmax in dmax_set) {
 ```
 
 Let's focus on a specific school to get an idea of how the competition/presence measures are calculated. The school we're focusing on is a TPS in Lakeland called Oscar J. Pope Elementary. ncessch=120159001783, location_id=3698, 
-```{r}
+```{r fig.width=7,fig.height=6}
 # get backdrop from stamen maps
-florida_background <- get_stamenmap( bbox = c(left = -81.97, bottom = 27.94, right = -81.85, top = 28.08), zoom = 12, color='color', maptype = "terrain")
+florida_background <- get_stamenmap( bbox = c(left = -81.98, bottom = 27.94, right = -81.83, top = 28.08), zoom = 12, color='color', maptype = "terrain-lines")
 
 # find all the locations within 8 miles of the one we're looking at
 proximateSchools = which(dm[3698,] < 5) %>% unname
 
-# create static plot
+# create static plot over years y
+y = c(2018)
 plot <- ggmap(florida_background, darken=c(0.5, 'white')) + 
-  geom_point(data=df[year==2018 & location_id%in%proximateSchools], mapping=aes(x=gm_lon, y=gm_lat, size=k12_enrollment, color=distinct_charter), alpha=0.8) +
-  geom_point(data=df[year==2018 & location_id==3698], mapping=aes(x=gm_lon, y=gm_lat), color='red', size=2) +
-  geom_text(aes(label=school_name),hjust=0, vjust=0) +
-  scale_size(range = c(1, 4)) + 
-  ggtitle("Emergence Of Charter Schools In FLorida") +
-  labs(title = "Emergence Of Charter Schools In Florida", x="Longitude", y="Latitude", size="Enrollment")
+  geom_point(data=df[year%in%y & location_id%in%proximateSchools,# & location_id!=3698, 
+                     .(k12_enrollment=sum(k12_enrollment), gm_lon=first(gm_lon), gm_lat=first(gm_lat), distinct_charter=first(distinct_charter)), 
+                     by=.(year, location_id)], 
+            mapping=aes(x=gm_lon, y=gm_lat, size=k12_enrollment, color=factor(distinct_charter, labels=c("TPS", "Charter")), alpha=round(1-(dm[3698, location_id]/4)^0.3, 2))) +
+  
+  geom_text_repel(data=df[year%in%y & location_id==3698], 
+            mapping=aes(x=gm_lon, y=gm_lat, label="Oscar J. Pope Elementary"), nudge_y=0.004, nudge_x=0.04, segment.size=0.17, segment.color='black') +
+  
+  geom_text_repel(data=df[year%in%y & location_id==3759], 
+            mapping=aes(x=gm_lon, y=gm_lat, label="South McKeel Academy (K-7)"), hjust=0, vjust=0, nudge_y=0.012, nudge_x=0.025, segment.size=0.2, segment.color='black') +
+  
+  scale_size(range = c(4, 12)) +
+  labs(title = "Charter Competition for Oscar J. Pope (2018)", x="Longitude", y="Latitude", size="Enrollment", color='School type', alpha="Presence in \nweighted average") +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(), axis.title = element_blank()) +
+  scale_color_manual(values=c("dodgerblue3", "orangered3")) +
+  theme(plot.title=element_text(size=18), plot.subtitle=element_text(size=12), legend.title=element_text(size=12), 
+        legend.text=element_text(size=11))
 
-plot
-```
-
-
-```{r}
-df[year==2018 & distinct_charter == F] %>% arrange(desc(csp_a0.3_dmax4)) %>% head(50) %>% view
-df[ncessch==120159001783]
-# 
-df[year==2018 & location_id%in%proximateSchools]
-
-```
-
-```{r}
-# 2018:   charter students: 292508  tps students: 2411983
-# 1999:   charter students: 17034  tps students: 2245783   
-df[year==1999 & distinct_charter == T]$k12_enrollment %>% sum
+# print/save plot
+plot #%>% ggsave(filename="img/competitionMeasureExample.jpg")
 ```
 
 
