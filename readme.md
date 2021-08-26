@@ -49,7 +49,8 @@ When alpha is greater than 1 the curve is convex, meaning that almost all school
 - Stata
 - Google Cloud Platform API
 - Unsupervised machine learning (hierarchical clustering)
-- Computational linear algebra (sparse matrices, distributed computing, analytic LOOCV)
+- Computational linear algebra (sparse matrices, analytic LOOCV)
+- Parallel computing
 - Time-series regression 
 - Text processing & fuzzy string matching
 
